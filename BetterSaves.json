@@ -2,7 +2,7 @@
   "id": "BetterSaves",
   "name": "BetterSaves",
   "author": "zuiter",
-  "description": "Synchronizes vanilla and modded Slay the Spire 2 saves with an in-game sync mode toggle.",
+  "description": "Synchronizes vanilla and modded Slay the Spire 2 saves with an in-game sync mode toggle.\n同步原版和模组版《杀戮尖塔2》的存档。",
   "version": "0.1.2",
   "has_pck": true,
   "has_dll": true,
