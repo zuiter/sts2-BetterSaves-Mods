@@ -1,0 +1,113 @@
+using System.Text.Json;
+using MegaCrit.Sts2.Core.Logging;
+
+namespace BetterSaves;
+
+internal enum SyncMode
+{
+    CurrentRunOnly = 0,
+    FullSync = 1
+}
+
+internal sealed class BetterSavesConfigData
+{
+    public SyncMode SyncMode { get; set; } = SyncMode.CurrentRunOnly;
+}
+
+internal static class BetterSavesConfig
+{
+    private static readonly object ConfigLock = new();
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        WriteIndented = true
+    };
+
+    private static BetterSavesConfigData? _cached;
+
+    public static SyncMode CurrentMode
+    {
+        get
+        {
+            lock (ConfigLock)
+            {
+                _cached ??= LoadUnsafe();
+                return _cached.SyncMode;
+            }
+        }
+    }
+
+    public static bool IsFullSyncEnabled => CurrentMode == SyncMode.FullSync;
+
+    public static void SetMode(SyncMode mode)
+    {
+        lock (ConfigLock)
+        {
+            _cached ??= LoadUnsafe();
+            if (_cached.SyncMode == mode)
+            {
+                return;
+            }
+
+            _cached.SyncMode = mode;
+            SaveUnsafe(_cached);
+        }
+
+        SaveInteropService.ReconcileNow(
+            $"config change: {mode}",
+            VanillaModeCompatibilityPatches.StartupReconcilePreference);
+    }
+
+    private static BetterSavesConfigData LoadUnsafe()
+    {
+        try
+        {
+            var configPath = GetConfigPath();
+            if (!File.Exists(configPath))
+            {
+                var defaults = new BetterSavesConfigData();
+                SaveUnsafe(defaults);
+                return defaults;
+            }
+
+            var json = File.ReadAllText(configPath);
+            return JsonSerializer.Deserialize<BetterSavesConfigData>(json, JsonOptions)
+                ?? new BetterSavesConfigData();
+        }
+        catch (Exception ex)
+        {
+            Log.Info($"[BetterSaves] Failed to load config, using defaults: {ex}");
+            return new BetterSavesConfigData();
+        }
+    }
+
+    private static void SaveUnsafe(BetterSavesConfigData config)
+    {
+        try
+        {
+            var configPath = GetConfigPath();
+            var directory = Path.GetDirectoryName(configPath);
+            if (!string.IsNullOrEmpty(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+
+            var json = JsonSerializer.Serialize(config, JsonOptions);
+            File.WriteAllText(configPath, json);
+            Log.Info($"[BetterSaves] Saved config to '{configPath}' with mode '{config.SyncMode}'.");
+        }
+        catch (Exception ex)
+        {
+            Log.Info($"[BetterSaves] Failed to save config: {ex}");
+        }
+    }
+
+    private static string GetConfigPath()
+    {
+        return Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            "SlayTheSpire2",
+            "mods",
+            "BetterSaves",
+            "config.json");
+    }
+}
