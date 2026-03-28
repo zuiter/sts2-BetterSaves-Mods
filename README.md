@@ -1,4 +1,4 @@
-# BetterSaves
+# 更好的存档 BetterSaves
 
 ## 中文
 
