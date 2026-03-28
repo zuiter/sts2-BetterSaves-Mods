@@ -1,5 +1,4 @@
 using Godot;
-using Godot.Collections;
 using HarmonyLib;
 using MegaCrit.Sts2.Core.Logging;
 using System.Collections;
@@ -12,13 +11,9 @@ internal static class ModdingScreenSettingsUi
     private const string SettingsRowName = "BetterSavesSettingsSyncModeRow";
     private const string InstallScheduledMetaName = "_better_saves_settings_install_scheduled";
     private const string NativePaginatorMetaName = "_better_saves_native_paginator";
-    private const string NativeArrowMetaName = "_better_saves_native_arrow";
-    private const string NativeArrowDirectionMetaName = "_better_saves_native_arrow_direction";
-    private const string ValueDisplayMetaName = "_better_saves_value_display";
-    private const string MainValueLabelName = "BetterSavesValueLabel";
-    private const string VfxValueLabelName = "BetterSavesValueVfxLabel";
-    private static readonly Vector2 ArrowSlotSize = new(82, 56);
-    private static readonly Vector2 ValueSlotSize = new(190, 56);
+    private const string NativePaginatorIndexMetaName = "_better_saves_native_paginator_index";
+    private const string ValueDisplayBaseScaleMetaName = "_better_saves_value_display_base_scale";
+    private const string ValueDisplayBaseModulateMetaName = "_better_saves_value_display_base_modulate";
     private const string NativePaginatorTypeName = "MegaCrit.Sts2.Core.Nodes.Screens.Settings.NPaginator";
     private static readonly Type? NativePaginatorType = AccessTools.TypeByName(NativePaginatorTypeName);
     private static readonly FieldInfo? PaginatorOptionsField = NativePaginatorType is null
@@ -30,10 +25,12 @@ internal static class ModdingScreenSettingsUi
     private static readonly FieldInfo? PaginatorLabelField = NativePaginatorType is null
         ? null
         : AccessTools.DeclaredField(NativePaginatorType, "_label") ?? AccessTools.Field(NativePaginatorType, "_label");
-    private static readonly MethodInfo? PaginatorOnIndexChangedMethod = NativePaginatorType is null
+    private static readonly FieldInfo? PaginatorVfxLabelField = NativePaginatorType is null
         ? null
-        : AccessTools.DeclaredMethod(NativePaginatorType, "OnIndexChanged", new[] { typeof(int) })
-            ?? AccessTools.DeclaredMethod(NativePaginatorType, "OnIndexChanged");
+        : AccessTools.DeclaredField(NativePaginatorType, "_vfxLabel")
+            ?? AccessTools.Field(NativePaginatorType, "_vfxLabel")
+            ?? AccessTools.DeclaredField(NativePaginatorType, "VfxLabel")
+            ?? AccessTools.Field(NativePaginatorType, "VfxLabel");
 
     public static void InstallInSettingsScreen(Node? screen)
     {
@@ -91,6 +88,7 @@ internal static class ModdingScreenSettingsUi
         }
 
         var templateRow = FindPaginatorTemplateRow(root, parent, anchorRow);
+        var visualTemplateRow = templateRow;
         var existingRow = FindExistingRow(root);
         if (existingRow is not null)
         {
@@ -107,7 +105,7 @@ internal static class ModdingScreenSettingsUi
 
         clone.Name = SettingsRowName;
 
-        var installedAsNative = templateRow is not null && TryPrepareNativePaginatorRow(clone, templateRow, anchorRow);
+        var installedAsNative = templateRow is not null && TryPrepareNativePaginatorRow(clone, templateRow, visualTemplateRow, anchorRow);
         if (!installedAsNative)
         {
             PrepareFallbackRow(clone, anchorRow);
@@ -116,12 +114,17 @@ internal static class ModdingScreenSettingsUi
         parent.AddChild(clone);
         parent.MoveChild(clone, anchorRow.GetIndex() + 1);
 
+        if (installedAsNative && FindPaginatorControl(clone) is Control installedPaginator)
+        {
+            ScheduleNativePaginatorRefresh(installedPaginator);
+        }
+
         Log.Info(
             $"[BetterSaves] Installed {(installedAsNative ? "native paginator" : "fallback")} sync mode row " +
             $"under '{anchorRow.Name}' using paginator template '{templateRow?.Name ?? "<none>"}'.");
     }
 
-    private static bool TryPrepareNativePaginatorRow(Control row, Control templateRow, Control anchorRow)
+    private static bool TryPrepareNativePaginatorRow(Control row, Control templateRow, Control? visualTemplateRow, Control anchorRow)
     {
         var templatePaginator = FindPaginatorControl(templateRow);
         if (templatePaginator is null)
@@ -129,8 +132,10 @@ internal static class ModdingScreenSettingsUi
             return false;
         }
 
-        var templateTitleLabel = FindTitleTemplateLabel(templateRow, templatePaginator)
-            ?? FindSettingsTitleLabel(anchorRow);
+        var visualTemplatePaginator = visualTemplateRow is null ? null : FindPaginatorControl(visualTemplateRow);
+
+        var templateTitleLabel = FindSettingsTitleLabel(templateRow, templatePaginator)
+            ?? FindSettingsTitleLabel(anchorRow, null);
 
         var freshPaginator = CreateFreshPaginator(templatePaginator);
         if (freshPaginator is null)
@@ -139,26 +144,46 @@ internal static class ModdingScreenSettingsUi
             return false;
         }
 
-        var visualArrowTemplates = FindArrowControls(freshPaginator)
-            .Take(2)
-            .ToList();
-        if (visualArrowTemplates.Count != 2)
+        MakeVisualResourcesUnique(row);
+        MakeVisualResourcesUnique(freshPaginator);
+        if (visualTemplatePaginator is not null)
+        {
+            ApplyPaginatorVisualTemplate(freshPaginator, visualTemplatePaginator);
+        }
+        RemoveHoverTipNodes(row);
+        ClearHoverTipBindings(row);
+        RemoveAllChildren(row);
+
+        var layout = new HBoxContainer
+        {
+            SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+            SizeFlagsVertical = Control.SizeFlags.ShrinkCenter
+        };
+
+        var title = CreateTitleLabel(templateTitleLabel);
+        UpdateNativeTextBindings(title, BetterSavesLocalization.GetPanelTitle(), BetterSavesLocalization.GetPanelDescription());
+
+        if (!ConfigureNativePaginator(freshPaginator))
         {
             freshPaginator.Free();
             return false;
         }
 
-        var visualValueTemplate = FindValueDisplayControl(freshPaginator, visualArrowTemplates);
-        if (visualValueTemplate is null)
-        {
-            freshPaginator.Free();
-            return false;
-        }
+        BindNativePaginatorControls(freshPaginator);
+        freshPaginator.SizeFlagsHorizontal = Control.SizeFlags.ShrinkEnd;
+        freshPaginator.SizeFlagsVertical = Control.SizeFlags.ShrinkCenter;
+        freshPaginator.MouseFilter = Control.MouseFilterEnum.Pass;
 
-        var customPaginator = CreateCustomNativePaginator(
-            freshPaginator,
-            visualArrowTemplates,
-            visualValueTemplate);
+        layout.AddChild(title);
+        layout.AddChild(freshPaginator);
+        row.AddChild(layout);
+        return true;
+    }
+
+    private static void PrepareFallbackRow(Control row, Control anchorRow)
+    {
+        var templateButton = FindFirstButtonLike(anchorRow);
+        var templateTitleLabel = FindSettingsTitleLabel(anchorRow, null);
 
         RemoveAllChildren(row);
 
@@ -169,28 +194,6 @@ internal static class ModdingScreenSettingsUi
         };
 
         var title = CreateTitleLabel(templateTitleLabel);
-        layout.AddChild(title);
-        layout.AddChild(customPaginator);
-        row.AddChild(layout);
-
-        freshPaginator.Free();
-        return true;
-    }
-
-    private static void PrepareFallbackRow(Control row, Control anchorRow)
-    {
-        var templateButton = FindFirstButtonLike(anchorRow);
-        var templateLabel = FindSettingsTitleLabel(anchorRow);
-
-        RemoveAllChildren(row);
-
-        var layout = new HBoxContainer
-        {
-            SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
-            SizeFlagsVertical = Control.SizeFlags.ShrinkCenter
-        };
-
-        var title = CreateTitleLabel(templateLabel);
         var paginator = CreateFallbackPaginator(templateButton);
 
         layout.AddChild(title);
@@ -200,26 +203,25 @@ internal static class ModdingScreenSettingsUi
 
     private static Label CreateTitleLabel(Label? template)
     {
-        var label = new Label
-        {
-            SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
-            SizeFlagsVertical = Control.SizeFlags.ShrinkCenter,
-            MouseFilter = Control.MouseFilterEnum.Ignore,
-            VerticalAlignment = VerticalAlignment.Center,
-            Text = BetterSavesLocalization.GetPanelTitle()
-        };
+        var label = template?.Duplicate() as Label
+            ?? new Label
+            {
+                SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+                SizeFlagsVertical = Control.SizeFlags.ShrinkCenter,
+                MouseFilter = Control.MouseFilterEnum.Ignore,
+                HorizontalAlignment = HorizontalAlignment.Left,
+                VerticalAlignment = VerticalAlignment.Center,
+                Text = BetterSavesLocalization.GetPanelTitle(),
+                Visible = true
+            };
 
-        if (template is not null)
-        {
-            CopyControlStyle(template, label);
-            label.LabelSettings = template.LabelSettings;
-            label.Modulate = template.Modulate;
-            label.SelfModulate = template.SelfModulate;
-        }
-
+        MakeVisualResourcesUnique(label);
+        label.Name = "BetterSavesTitleLabel";
         label.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
         label.SizeFlagsVertical = Control.SizeFlags.ShrinkCenter;
         label.MouseFilter = Control.MouseFilterEnum.Ignore;
+        label.HorizontalAlignment = HorizontalAlignment.Left;
+        label.Text = BetterSavesLocalization.GetPanelTitle();
         label.Visible = true;
         return label;
     }
@@ -332,31 +334,6 @@ internal static class ModdingScreenSettingsUi
         control.Connect("pressed", Callable.From(action));
     }
 
-    private static void ClearPressedConnections(Control control)
-    {
-        if (!control.HasSignal("pressed"))
-        {
-            return;
-        }
-
-        foreach (Dictionary connection in control.GetSignalConnectionList("pressed"))
-        {
-            if (!connection.ContainsKey("callable"))
-            {
-                continue;
-            }
-
-            var callableVariant = (Variant)connection["callable"];
-            if (callableVariant.VariantType != Variant.Type.Callable)
-            {
-                continue;
-            }
-
-            var callable = callableVariant.AsCallable();
-            control.Disconnect("pressed", callable);
-        }
-    }
-
     private static void CycleBackward()
     {
         Log.Info("[BetterSaves] Sync mode left arrow pressed.");
@@ -373,63 +350,83 @@ internal static class ModdingScreenSettingsUi
             : SyncMode.CurrentRunOnly);
     }
 
-    internal static void HandleNativePaginatorIndexChanged(object? instance)
+    internal static bool HandleNativePaginatorIndexChanged(object? instance, int index)
     {
         if (instance is not Control paginator || !paginator.HasMeta(NativePaginatorMetaName))
         {
-            return;
+            return false;
         }
 
-        var mode = IndexToMode(ReadPaginatorIndex(paginator));
+        WritePaginatorIndex(paginator, index);
+        var mode = IndexToMode(index);
         BetterSavesConfig.SetMode(mode);
+        RefreshNativePaginator(paginator, GetModeDisplayNames(), index);
+        return true;
     }
 
-    internal static bool HandleNativePaginateArrowRelease(object? instance)
+    internal static bool HandleNativePaginatorReady(object? instance)
     {
-        if (instance is not Control arrow || !arrow.HasMeta(NativeArrowMetaName))
+        if (instance is not Control paginator || !paginator.HasMeta(NativePaginatorMetaName))
         {
             return false;
         }
 
-        var directionVariant = arrow.GetMeta(NativeArrowDirectionMetaName);
-        if (directionVariant.VariantType != Variant.Type.Int)
+        var arrows = FindArrowControls(paginator);
+        var labels = EnumerateDescendants(paginator)
+            .OfType<Label>()
+            .Where(label => !arrows.Any(arrow => IsDescendantOf(label, arrow)))
+            .OrderBy(GetControlSortX)
+            .ToList();
+
+        if (labels.Count > 0)
+        {
+            PaginatorLabelField?.SetValue(paginator, labels[0]);
+        }
+
+        if (labels.Count > 1 && PaginatorVfxLabelField is not null)
+        {
+            try
+            {
+                PaginatorVfxLabelField.SetValue(paginator, labels[1]);
+            }
+            catch
+            {
+                // Some paginator variants do not expose a writable VFX label field.
+            }
+        }
+
+        RefreshNativePaginator(paginator, GetModeDisplayNames(), ReadPaginatorIndex(paginator));
+        return true;
+    }
+
+    internal static bool HandleNativePaginatorIndexChangeHelper(object? instance, bool pagedLeft)
+    {
+        if (instance is not Control paginator || !paginator.HasMeta(NativePaginatorMetaName))
         {
             return false;
         }
 
-        var direction = directionVariant.AsInt32();
-        var valueDisplayVariant = arrow.GetMeta(ValueDisplayMetaName);
-        if (valueDisplayVariant.VariantType != Variant.Type.Object)
+        var options = GetModeDisplayNames();
+        if (options.Length == 0)
         {
-            return false;
+            return true;
         }
 
-        if (valueDisplayVariant.AsGodotObject() is not Control valueDisplay)
-        {
-            return false;
-        }
+        var currentIndex = Math.Clamp(ReadPaginatorIndex(paginator), 0, options.Length - 1);
+        var nextIndex = pagedLeft
+            ? (currentIndex + options.Length - 1) % options.Length
+            : (currentIndex + 1) % options.Length;
 
-        if (direction < 0)
-        {
-            CycleBackward();
-        }
-        else
-        {
-            CycleForward();
-        }
-
-        RefreshValueDisplay(valueDisplay);
+        WritePaginatorIndex(paginator, nextIndex);
+        BetterSavesConfig.SetMode(IndexToMode(nextIndex));
+        RefreshNativePaginator(paginator, options, nextIndex);
         return true;
     }
 
     private static void RefreshValueDisplay(Control valueDisplay)
     {
         var text = BetterSavesLocalization.GetModeDisplayName(BetterSavesConfig.CurrentMode);
-        if (TryRefreshAnimatedValueDisplay(valueDisplay, text))
-        {
-            return;
-        }
-
+        var previousText = GetDisplayedText(valueDisplay);
         switch (valueDisplay)
         {
             case Label label:
@@ -438,6 +435,70 @@ internal static class ModdingScreenSettingsUi
             case Button button:
                 button.Text = text;
                 break;
+            default:
+            {
+                var textProperty = valueDisplay.GetType().GetProperty("Text");
+                if (textProperty?.CanWrite == true && textProperty.PropertyType == typeof(string))
+                {
+                    textProperty.SetValue(valueDisplay, text);
+                }
+
+                break;
+            }
+        }
+
+        if (!string.Equals(previousText, text, StringComparison.Ordinal))
+        {
+            AnimateValueDisplay(valueDisplay);
+        }
+    }
+
+    private static void ApplyNativeRowTitle(Control row, Control paginator)
+    {
+        var titleControls = EnumerateDescendants(row)
+            .OfType<Control>()
+            .Where(control => control != paginator)
+            .Where(control => !IsDescendantOf(control, paginator))
+            .Where(control => CanDisplayText(control))
+            .Where(control => !HasHoverTipAncestor(control))
+            .OrderBy(control => GetControlSortX(control))
+            .ToList();
+
+        if (titleControls.Count == 0)
+        {
+            var fallbackLabel = FindSettingsTitleLabel(row, paginator);
+            if (fallbackLabel is not null)
+            {
+                fallbackLabel.Text = BetterSavesLocalization.GetPanelTitle();
+                fallbackLabel.Visible = true;
+            }
+
+            return;
+        }
+
+        foreach (var control in titleControls)
+        {
+            SetDisplayedText(control, BetterSavesLocalization.GetPanelTitle());
+            UpdateNativeTextBindings(control, BetterSavesLocalization.GetPanelTitle(), BetterSavesLocalization.GetPanelDescription());
+            control.Visible = true;
+        }
+    }
+
+    private static void BindNativePaginatorControls(Control paginator)
+    {
+        var arrows = FindArrowControls(paginator)
+            .OrderBy(GetControlSortX)
+            .ToList();
+
+        var valueDisplay = FindValueDisplayControl(paginator, arrows);
+        if (valueDisplay is not null)
+        {
+            RefreshValueDisplay(valueDisplay);
+        }
+
+        foreach (var arrow in arrows)
+        {
+            ClearHoverTipBindings(arrow);
         }
     }
 
@@ -453,85 +514,6 @@ internal static class ModdingScreenSettingsUi
         target.SelfModulate = source.SelfModulate;
     }
 
-    private static Control CreateCustomNativePaginator(
-        Control templatePaginator,
-        IReadOnlyList<Control> arrowTemplates,
-        Control valueTemplate)
-    {
-        var container = new HBoxContainer
-        {
-            Name = templatePaginator.Name,
-            SizeFlagsHorizontal = Control.SizeFlags.ShrinkEnd,
-            SizeFlagsVertical = templatePaginator.SizeFlagsVertical,
-            CustomMinimumSize = templatePaginator.CustomMinimumSize,
-            Theme = templatePaginator.Theme,
-            ThemeTypeVariation = templatePaginator.ThemeTypeVariation,
-            MouseFilter = Control.MouseFilterEnum.Pass,
-            Alignment = BoxContainer.AlignmentMode.Center
-        };
-        container.AddThemeConstantOverride("separation", 10);
-
-        var valueDisplay = CreateNativeValueDisplay(valueTemplate);
-        RefreshValueDisplay(valueDisplay);
-        var leftArrow = CreateNativeArrowControl(arrowTemplates[0], -1, valueDisplay);
-        var rightArrow = CreateNativeArrowControl(arrowTemplates[1], 1, valueDisplay);
-
-        container.AddChild(leftArrow);
-        container.AddChild(valueDisplay);
-        container.AddChild(rightArrow);
-        return container;
-    }
-
-    private static Control CreateNativeArrowControl(Control arrowTemplate, int direction, Control valueDisplay)
-    {
-        var arrow = arrowTemplate.Duplicate() as Control ?? throw new InvalidOperationException("Failed to duplicate native arrow.");
-        arrow.SetMeta(NativeArrowMetaName, true);
-        arrow.SetMeta(NativeArrowDirectionMetaName, direction);
-        arrow.SetMeta(ValueDisplayMetaName, valueDisplay);
-        arrow.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);
-        arrow.Position = Vector2.Zero;
-
-        var slot = new Control
-        {
-            MouseFilter = Control.MouseFilterEnum.Ignore,
-            SizeFlagsHorizontal = Control.SizeFlags.ShrinkCenter,
-            SizeFlagsVertical = arrowTemplate.SizeFlagsVertical,
-            CustomMinimumSize = new Vector2(
-                Math.Max(ArrowSlotSize.X, arrowTemplate.CustomMinimumSize.X),
-                Math.Max(ArrowSlotSize.Y, arrowTemplate.CustomMinimumSize.Y))
-        };
-
-        slot.AddChild(arrow);
-        return slot;
-    }
-
-    private static Control CreateNativeValueDisplay(Control template)
-    {
-        var wrapper = new Control
-        {
-            MouseFilter = Control.MouseFilterEnum.Ignore,
-            SizeFlagsHorizontal = Control.SizeFlags.ShrinkCenter,
-            SizeFlagsVertical = template.SizeFlagsVertical,
-            CustomMinimumSize = new Vector2(
-                Math.Max(ValueSlotSize.X, template.CustomMinimumSize.X),
-                Math.Max(ValueSlotSize.Y, template.CustomMinimumSize.Y))
-        };
-
-        var mainLabel = template.Duplicate() as Control ?? CreateFallbackValueLabel(template);
-        mainLabel.Name = MainValueLabelName;
-        mainLabel.MouseFilter = Control.MouseFilterEnum.Ignore;
-        mainLabel.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);
-
-        var vfxLabel = template.Duplicate() as Control ?? CreateFallbackValueLabel(template);
-        vfxLabel.Name = VfxValueLabelName;
-        vfxLabel.MouseFilter = Control.MouseFilterEnum.Ignore;
-        vfxLabel.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);
-        vfxLabel.Visible = false;
-
-        wrapper.AddChild(vfxLabel);
-        wrapper.AddChild(mainLabel);
-        return wrapper;
-    }
 
     private static bool ConfigureNativePaginator(Control paginator)
     {
@@ -547,7 +529,8 @@ internal static class ModdingScreenSettingsUi
 
         if (!WritePaginatorOptions(paginator, options))
         {
-            return false;
+            var fieldTypeName = PaginatorOptionsField?.FieldType.FullName ?? "<missing>";
+            Log.Info($"[BetterSaves] Could not write paginator options using field type '{fieldTypeName}'. Continuing with BetterSaves-managed labels.");
         }
 
         WritePaginatorIndex(paginator, index);
@@ -624,14 +607,43 @@ internal static class ModdingScreenSettingsUi
 
     private static void WritePaginatorIndex(Control paginator, int index)
     {
-        PaginatorCurrentIndexField?.SetValue(paginator, index);
+        paginator.SetMeta(NativePaginatorIndexMetaName, index);
+
+        if (PaginatorCurrentIndexField is null)
+        {
+            return;
+        }
+
+        try
+        {
+            PaginatorCurrentIndexField.SetValue(paginator, index);
+        }
+        catch
+        {
+            // The fallback meta still keeps BetterSaves pagination stable.
+        }
     }
 
     private static int ReadPaginatorIndex(Control paginator)
     {
-        if (PaginatorCurrentIndexField?.GetValue(paginator) is int index)
+        if (paginator.HasMeta(NativePaginatorIndexMetaName))
         {
-            return index;
+            return ((Variant)paginator.GetMeta(NativePaginatorIndexMetaName)).AsInt32();
+        }
+
+        if (PaginatorCurrentIndexField is not null)
+        {
+            try
+            {
+                if (PaginatorCurrentIndexField.GetValue(paginator) is int fieldIndex)
+                {
+                    return fieldIndex;
+                }
+            }
+            catch
+            {
+                // Fall back to BetterSaves-managed metadata below.
+            }
         }
 
         return 0;
@@ -639,36 +651,56 @@ internal static class ModdingScreenSettingsUi
 
     private static void RefreshNativePaginator(Control paginator, IReadOnlyList<string> options, int index)
     {
-        TryInvokePaginatorOnIndexChanged(paginator, index);
+        var text = options[Math.Clamp(index, 0, options.Count - 1)];
 
         if (PaginatorLabelField?.GetValue(paginator) is Control labelControl)
         {
-            SetDisplayedText(labelControl, options[Math.Clamp(index, 0, options.Count - 1)]);
+            SetDisplayedText(labelControl, text);
+        }
+
+        if (PaginatorVfxLabelField?.GetValue(paginator) is Control vfxLabelControl)
+        {
+            SetDisplayedText(vfxLabelControl, text);
+        }
+
+        RefreshAllPaginatorTextLayers(paginator, text);
+    }
+
+    private static void RefreshAllPaginatorTextLayers(Control paginator, string text)
+    {
+        var arrows = FindArrowControls(paginator);
+        var textControls = EnumerateDescendants(paginator)
+            .OfType<Control>()
+            .Where(control => CanDisplayText(control))
+            .Where(control => !arrows.Any(arrow => IsDescendantOf(control, arrow)))
+            .ToList();
+
+        foreach (var control in textControls)
+        {
+            SetDisplayedText(control, text);
         }
     }
 
-    private static bool TryInvokePaginatorOnIndexChanged(Control paginator, int index)
+    private static void ScheduleNativePaginatorRefresh(Control paginator)
     {
-        if (PaginatorOnIndexChangedMethod is null)
+        var tree = paginator.GetTree();
+        if (tree is null)
         {
-            return false;
+            return;
         }
 
-        var parameters = PaginatorOnIndexChangedMethod.GetParameters();
-        var args = parameters.Length switch
+        var timer = tree.CreateTimer(0.0);
+        timer.Timeout += () =>
         {
-            0 => System.Array.Empty<object>(),
-            1 => new object[] { index },
-            _ => null
+            if (!GodotObject.IsInstanceValid(paginator))
+            {
+                return;
+            }
+
+            var index = ModeToIndex(BetterSavesConfig.CurrentMode);
+            WritePaginatorIndex(paginator, index);
+            RefreshNativePaginator(paginator, GetModeDisplayNames(), index);
         };
-
-        if (args is null)
-        {
-            return false;
-        }
-
-        PaginatorOnIndexChangedMethod.Invoke(paginator, args);
-        return true;
     }
 
     private static int ModeToIndex(SyncMode mode)
@@ -697,7 +729,27 @@ internal static class ModdingScreenSettingsUi
             return null;
         }
 
-        var paginator = packedScene.Instantiate<Control>();
+        var instantiatedRoot = packedScene.Instantiate<Control>();
+        var paginator = instantiatedRoot;
+        if (NativePaginatorType is not null && !NativePaginatorType.IsInstanceOfType(paginator))
+        {
+            var nestedPaginator = FindPaginatorControl(instantiatedRoot);
+            if (nestedPaginator is not null && NativePaginatorType.IsInstanceOfType(nestedPaginator))
+            {
+                nestedPaginator.GetParent()?.RemoveChild(nestedPaginator);
+                instantiatedRoot.QueueFree();
+                paginator = nestedPaginator;
+            }
+            else
+            {
+                Log.Info(
+                    $"[BetterSaves] Scene '{scenePath}' instantiated '{instantiatedRoot.GetType().FullName}', " +
+                    "which does not expose an NPaginator root or child. Falling back to duplicating the live paginator.");
+                instantiatedRoot.QueueFree();
+                return templatePaginator.Duplicate() as Control;
+            }
+        }
+
         paginator.Name = templatePaginator.Name;
         paginator.SizeFlagsHorizontal = templatePaginator.SizeFlagsHorizontal;
         paginator.SizeFlagsVertical = templatePaginator.SizeFlagsVertical;
@@ -733,7 +785,8 @@ internal static class ModdingScreenSettingsUi
             .OrderBy(control => Math.Abs(control.GetIndex() - anchorRow.GetIndex()))
             .ToList();
 
-        var siblingTemplate = siblingRows.FirstOrDefault(ContainsPaginator);
+        var siblingTemplate = siblingRows.FirstOrDefault(HasInstantiablePaginatorTemplate)
+            ?? siblingRows.FirstOrDefault(ContainsPaginator);
         if (siblingTemplate is not null)
         {
             return siblingTemplate;
@@ -742,12 +795,61 @@ internal static class ModdingScreenSettingsUi
         return EnumerateDescendants(root)
             .OfType<Control>()
             .Where(control => control != anchorRow)
-            .FirstOrDefault(ContainsPaginator);
+            .FirstOrDefault(HasInstantiablePaginatorTemplate)
+            ?? EnumerateDescendants(root)
+                .OfType<Control>()
+                .Where(control => control != anchorRow)
+                .FirstOrDefault(ContainsPaginator);
     }
 
     private static bool ContainsPaginator(Control row)
     {
         return FindPaginatorControl(row) is not null;
+    }
+
+    private static bool HasInstantiablePaginatorTemplate(Control row)
+    {
+        var paginator = FindPaginatorControl(row);
+        return paginator is not null && !string.IsNullOrWhiteSpace(paginator.SceneFilePath);
+    }
+
+    private static void ApplyPaginatorVisualTemplate(Control targetPaginator, Control sourcePaginator)
+    {
+        CopyControlStyle(sourcePaginator, targetPaginator);
+        targetPaginator.CustomMinimumSize = sourcePaginator.CustomMinimumSize;
+
+        var sourceArrows = FindArrowControls(sourcePaginator)
+            .OrderBy(GetControlSortX)
+            .ToList();
+        var targetArrows = FindArrowControls(targetPaginator)
+            .OrderBy(GetControlSortX)
+            .ToList();
+
+        for (var i = 0; i < Math.Min(sourceArrows.Count, targetArrows.Count); i++)
+        {
+            CopyVisualStyle(sourceArrows[i], targetArrows[i]);
+        }
+
+        var sourceValue = FindValueDisplayControl(sourcePaginator, sourceArrows);
+        var targetValue = FindValueDisplayControl(targetPaginator, targetArrows);
+        if (sourceValue is not null && targetValue is not null)
+        {
+            CopyVisualStyle(sourceValue, targetValue);
+        }
+    }
+
+    private static void CopyVisualStyle(Control source, Control target)
+    {
+        CopyControlStyle(source, target);
+        target.Scale = source.Scale;
+        target.Rotation = source.Rotation;
+        target.PivotOffset = source.PivotOffset;
+        target.CustomMinimumSize = source.CustomMinimumSize;
+
+        if (source is Label sourceLabel && target is Label targetLabel)
+        {
+            targetLabel.LabelSettings = sourceLabel.LabelSettings?.Duplicate(true) as LabelSettings ?? sourceLabel.LabelSettings;
+        }
     }
 
     private static Control? FindPaginatorControl(Node root)
@@ -835,86 +937,225 @@ internal static class ModdingScreenSettingsUi
         return EnumerateDescendants(root).OfType<Label>().FirstOrDefault();
     }
 
-    private static Label? FindSettingsTitleLabel(Node row)
+    private static void RemoveHoverTipNodes(Node root)
     {
-        var labels = EnumerateDescendants(row)
-            .OfType<Label>()
-            .Where(label =>
-                !string.IsNullOrWhiteSpace(label.Text)
-                && !label.Text.Contains(">", StringComparison.Ordinal)
-                && !label.Text.Contains("<", StringComparison.Ordinal))
+        var hoverTipNodes = EnumerateDescendants(root)
+            .Where(IsHoverTipNode)
             .ToList();
 
-        if (labels.Count == 0)
+        foreach (var node in hoverTipNodes)
         {
-            return null;
+            node.GetParent()?.RemoveChild(node);
+            node.QueueFree();
         }
-
-        return labels
-            .OrderByDescending(label => label.Text.Length)
-            .ThenBy(label => GetNodeDepth(label))
-            .First();
     }
 
-    private static bool TryRefreshAnimatedValueDisplay(Control valueDisplay, string text)
+    private static void ClearHoverTipBindings(Node root)
     {
-        var mainLabel = valueDisplay.GetNodeOrNull<Control>(MainValueLabelName);
-        var vfxLabel = valueDisplay.GetNodeOrNull<Control>(VfxValueLabelName);
-        if (mainLabel is null || vfxLabel is null)
+        foreach (var node in EnumerateDescendants(root).Prepend(root))
         {
-            return false;
+            ClearHoverTipProperties(node);
+            ClearHoverTipFields(node);
+            ClearHoverTipMeta(node);
         }
-
-        var previousText = GetDisplayedText(mainLabel);
-        SetDisplayedText(mainLabel, text);
-
-        if (string.Equals(previousText, text, StringComparison.Ordinal))
-        {
-            return true;
-        }
-
-        SetDisplayedText(vfxLabel, previousText);
-        vfxLabel.Visible = !string.IsNullOrEmpty(previousText);
-        vfxLabel.Modulate = new Color(1f, 0.92f, 0.72f, 1f);
-        vfxLabel.Position = Vector2.Zero;
-        mainLabel.Scale = new Vector2(1.14f, 1.14f);
-        mainLabel.Modulate = new Color(1f, 0.94f, 0.78f, 1f);
-
-        var tween = valueDisplay.CreateTween();
-        tween.SetParallel(true);
-        tween.TweenProperty(mainLabel, "scale", Vector2.One, 0.18);
-        tween.TweenProperty(mainLabel, "modulate", Colors.White, 0.18);
-        if (!string.IsNullOrEmpty(previousText))
-        {
-            tween.TweenProperty(vfxLabel, "position:y", -16f, 0.20);
-            tween.TweenProperty(vfxLabel, "modulate:a", 0f, 0.20);
-        }
-
-        tween.Finished += () =>
-        {
-            if (GodotObject.IsInstanceValid(vfxLabel))
-            {
-                vfxLabel.Visible = false;
-                vfxLabel.Position = Vector2.Zero;
-            }
-
-            if (GodotObject.IsInstanceValid(mainLabel))
-            {
-                mainLabel.Scale = Vector2.One;
-            }
-        };
-
-        return true;
     }
 
-    private static string GetDisplayedText(Control control)
+    private static void ClearHoverTipProperties(Node node)
     {
-        return control switch
+        if (node is Control control)
         {
-            Label label => label.Text,
-            Button button => button.Text,
-            _ => control.GetType().GetProperty("Text")?.GetValue(control) as string ?? string.Empty
-        };
+            control.TooltipText = string.Empty;
+        }
+
+        var properties = node.GetType().GetProperties(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        foreach (var property in properties)
+        {
+            if (!property.CanWrite || property.GetIndexParameters().Length != 0)
+            {
+                continue;
+            }
+
+            var name = property.Name;
+            if (!name.Contains("HoverTip", StringComparison.OrdinalIgnoreCase)
+                && !name.Contains("Tooltip", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            try
+            {
+                if (property.PropertyType == typeof(string))
+                {
+                    property.SetValue(node, string.Empty);
+                }
+                else if (!property.PropertyType.IsValueType || Nullable.GetUnderlyingType(property.PropertyType) is not null)
+                {
+                    property.SetValue(node, null);
+                }
+            }
+            catch
+            {
+                // Best-effort cleanup only. Some native properties are intentionally read-only.
+            }
+        }
+    }
+
+    private static void ClearHoverTipFields(Node node)
+    {
+        var fields = node.GetType().GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        foreach (var field in fields)
+        {
+            var name = field.Name;
+            if (!name.Contains("HoverTip", StringComparison.OrdinalIgnoreCase)
+                && !name.Contains("Tooltip", StringComparison.OrdinalIgnoreCase)
+                && !name.Contains("Description", StringComparison.OrdinalIgnoreCase)
+                && !name.Contains("Desc", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            try
+            {
+                if (field.FieldType == typeof(string))
+                {
+                    field.SetValue(node, string.Empty);
+                }
+                else if (!field.FieldType.IsValueType || Nullable.GetUnderlyingType(field.FieldType) is not null)
+                {
+                    field.SetValue(node, null);
+                }
+            }
+            catch
+            {
+                // Best-effort cleanup only. Some native fields are intentionally not writable.
+            }
+        }
+    }
+
+    private static void UpdateNativeTextBindings(Node node, string title, string description)
+    {
+        UpdateNativeTextProperties(node, title, description);
+        UpdateNativeTextFields(node, title, description);
+    }
+
+    private static void UpdateNativeTextProperties(Node node, string title, string description)
+    {
+        var properties = node.GetType().GetProperties(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        foreach (var property in properties)
+        {
+            if (!property.CanWrite || property.GetIndexParameters().Length != 0 || property.PropertyType != typeof(string))
+            {
+                continue;
+            }
+
+            var replacement = GetTextReplacementForMember(property.Name, title, description);
+            if (replacement is null)
+            {
+                continue;
+            }
+
+            try
+            {
+                property.SetValue(node, replacement);
+            }
+            catch
+            {
+                // Best-effort only.
+            }
+        }
+    }
+
+    private static void UpdateNativeTextFields(Node node, string title, string description)
+    {
+        var fields = node.GetType().GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        foreach (var field in fields)
+        {
+            if (field.FieldType != typeof(string))
+            {
+                continue;
+            }
+
+            var replacement = GetTextReplacementForMember(field.Name, title, description);
+            if (replacement is null)
+            {
+                continue;
+            }
+
+            try
+            {
+                field.SetValue(node, replacement);
+            }
+            catch
+            {
+                // Best-effort only.
+            }
+        }
+    }
+
+    private static string? GetTextReplacementForMember(string memberName, string title, string description)
+    {
+        if (memberName.Contains("Description", StringComparison.OrdinalIgnoreCase)
+            || memberName.Contains("Desc", StringComparison.OrdinalIgnoreCase)
+            || memberName.Contains("Tooltip", StringComparison.OrdinalIgnoreCase)
+            || memberName.Contains("HoverTip", StringComparison.OrdinalIgnoreCase)
+            || memberName.Contains("Body", StringComparison.OrdinalIgnoreCase)
+            || memberName.Contains("Content", StringComparison.OrdinalIgnoreCase))
+        {
+            return description;
+        }
+
+        if (memberName.Contains("Title", StringComparison.OrdinalIgnoreCase)
+            || memberName.Contains("Label", StringComparison.OrdinalIgnoreCase)
+            || memberName.Contains("Header", StringComparison.OrdinalIgnoreCase)
+            || memberName.Equals("Text", StringComparison.OrdinalIgnoreCase))
+        {
+            return title;
+        }
+
+        return null;
+    }
+
+    private static void ClearHoverTipMeta(Node node)
+    {
+        foreach (var metaName in node.GetMetaList())
+        {
+            var key = metaName.ToString();
+            if (!key.Contains("HoverTip", StringComparison.OrdinalIgnoreCase)
+                && !key.Contains("Tooltip", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            node.RemoveMeta(metaName);
+        }
+    }
+
+    private static Label? FindSettingsTitleLabel(Node row, Node? excludedSubtree)
+    {
+        return EnumerateDescendants(row)
+            .OfType<Label>()
+            .Where(label => !string.IsNullOrWhiteSpace(label.Text))
+            .Where(label => excludedSubtree is null || !IsDescendantOf(label, excludedSubtree))
+            .Where(label => !HasButtonLikeAncestor(label))
+            .Where(label => !HasHoverTipAncestor(label))
+            .OrderBy(label => GetControlSortX(label))
+            .ThenByDescending(label => label.Text.Length)
+            .FirstOrDefault()
+            ?? EnumerateDescendants(row)
+                .OfType<Label>()
+                .Where(label => !string.IsNullOrWhiteSpace(label.Text))
+                .FirstOrDefault()
+            ?? FindFirstLabel(row);
+    }
+
+    private static bool IsHoverTipNode(Node node)
+    {
+        var name = node.Name.ToString();
+        var typeName = node.GetType().Name;
+        return name.Contains("HoverTip", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("Tooltip", StringComparison.OrdinalIgnoreCase)
+            || typeName.Contains("HoverTip", StringComparison.OrdinalIgnoreCase)
+            || typeName.Contains("Tooltip", StringComparison.OrdinalIgnoreCase);
     }
 
     private static Control? FindFirstButtonLike(Node root)
@@ -925,15 +1166,6 @@ internal static class ModdingScreenSettingsUi
                 control.GetType().Name.Contains("Button", StringComparison.OrdinalIgnoreCase)
                 || control.Name.ToString().Contains("Button", StringComparison.OrdinalIgnoreCase)
                 || control.Name.ToString().Contains("Dropdown", StringComparison.OrdinalIgnoreCase));
-    }
-
-    private static Label? FindTitleTemplateLabel(Node row, Node paginator)
-    {
-        return EnumerateDescendants(row)
-            .OfType<Label>()
-            .Where(label => !IsDescendantOf(label, paginator))
-            .OrderByDescending(label => label.Text?.Length ?? 0)
-            .FirstOrDefault();
     }
 
     private static int GetNodeDepth(Node node)
@@ -963,6 +1195,116 @@ internal static class ModdingScreenSettingsUi
         }
 
         return false;
+    }
+
+    private static bool HasButtonLikeAncestor(Control control)
+    {
+        Node? current = control;
+        while (current is not null)
+        {
+            if (current is Control currentControl && IsButtonLike(currentControl))
+            {
+                return true;
+            }
+
+            current = current.GetParent();
+        }
+
+        return false;
+    }
+
+    private static bool HasHoverTipAncestor(Control control)
+    {
+        Node? current = control;
+        while (current is not null)
+        {
+            var name = current.Name.ToString();
+            var typeName = current.GetType().Name;
+            if (name.Contains("HoverTip", StringComparison.OrdinalIgnoreCase)
+                || typeName.Contains("HoverTip", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            current = current.GetParent();
+        }
+
+        return false;
+    }
+
+    private static bool IsButtonLike(Control control)
+    {
+        var name = control.Name.ToString();
+        var typeName = control.GetType().Name;
+        return control is Button
+            || name.Contains("Button", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("Dropdown", StringComparison.OrdinalIgnoreCase)
+            || typeName.Contains("Button", StringComparison.OrdinalIgnoreCase)
+            || typeName.Contains("Dropdown", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static float GetControlSortX(Control control)
+    {
+        var rect = control.GetGlobalRect();
+        return rect.Position.X;
+    }
+
+    private static void MakeVisualResourcesUnique(Node root)
+    {
+        foreach (var node in EnumerateDescendants(root).Prepend(root))
+        {
+            if (node is CanvasItem canvasItem && canvasItem.Material is Resource material)
+            {
+                canvasItem.Material = material.Duplicate(true) as Material;
+            }
+
+            if (node is Control control)
+            {
+                if (control.Theme is Resource theme)
+                {
+                    control.Theme = theme.Duplicate(true) as Theme;
+                }
+
+                if (control is Label label && label.LabelSettings is Resource labelSettings)
+                {
+                    label.LabelSettings = labelSettings.Duplicate(true) as LabelSettings;
+                }
+            }
+        }
+    }
+
+    private static string GetDisplayedText(Control control)
+    {
+        return control switch
+        {
+            Label label => label.Text,
+            Button button => button.Text,
+            _ => control.GetType().GetProperty("Text")?.GetValue(control) as string ?? string.Empty
+        };
+    }
+
+    private static void AnimateValueDisplay(Control valueDisplay)
+    {
+        if (!valueDisplay.HasMeta(ValueDisplayBaseScaleMetaName))
+        {
+            valueDisplay.SetMeta(ValueDisplayBaseScaleMetaName, valueDisplay.Scale);
+        }
+
+        if (!valueDisplay.HasMeta(ValueDisplayBaseModulateMetaName))
+        {
+            valueDisplay.SetMeta(ValueDisplayBaseModulateMetaName, valueDisplay.Modulate);
+        }
+
+        var baseScale = ((Variant)valueDisplay.GetMeta(ValueDisplayBaseScaleMetaName)).AsVector2();
+        var baseModulate = ((Variant)valueDisplay.GetMeta(ValueDisplayBaseModulateMetaName)).AsColor();
+
+        valueDisplay.Scale = baseScale * 1.08f;
+        valueDisplay.Modulate = new Color(1f, 0.94f, 0.76f, baseModulate.A);
+
+        var tween = valueDisplay.CreateTween();
+        tween.SetParallel(true);
+        tween.TweenProperty(valueDisplay, "scale", baseScale, 0.16);
+        tween.TweenProperty(valueDisplay, "modulate", baseModulate, 0.16);
     }
 
     private static IEnumerable<Node> EnumerateDescendants(Node node)

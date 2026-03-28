@@ -16,7 +16,12 @@ internal static class SaveInteropService
         new(StringComparer.OrdinalIgnoreCase)
         {
             "saves/current_run.save",
-            "saves/current_run.save.backup",
+            "saves/current_run.save.backup"
+        };
+
+    private static readonly HashSet<string> IgnoredPaths =
+        new(StringComparer.OrdinalIgnoreCase)
+        {
             "saves/current_run_mp.save",
             "saves/current_run_mp.save.backup"
         };
@@ -452,6 +457,11 @@ internal static class SaveInteropService
         private static bool IsSyncableProfileRelativePath(string profileRelativePath)
         {
             var normalized = NormalizeRelativePath(profileRelativePath);
+            if (IgnoredPaths.Contains(normalized))
+            {
+                return false;
+            }
+
             return BetterSavesConfig.IsFullSyncEnabled || CurrentRunOnlyPaths.Contains(normalized);
         }
 

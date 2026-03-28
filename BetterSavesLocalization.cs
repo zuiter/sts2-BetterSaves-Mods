@@ -17,6 +17,13 @@ internal static class BetterSavesLocalization
         return IsChinese() ? "BetterSaves\u4e92\u901a\u6a21\u5f0f" : "BetterSaves Interop Mode";
     }
 
+    public static string GetPanelDescription()
+    {
+        return IsChinese()
+            ? "切换 BetterSaves 的互通范围。仅同步当前局只同步当前进行中的 run；完整同步会同步整个存档位的数据。"
+            : "Choose how much BetterSaves syncs. Only Current Run mirrors the active run only; Full Sync mirrors the entire save slot.";
+    }
+
     public static string GetModeDisplayName(SyncMode mode)
     {
         if (IsChinese())

@@ -14,8 +14,8 @@ internal static class VanillaModeCompatibilityPatches
     private const string UserDataPathProviderTypeName = "MegaCrit.Sts2.Core.Saves.UserDataPathProvider";
     private const string SettingsScreenTypeName = "MegaCrit.Sts2.Core.Nodes.Screens.Settings.NSettingsScreen";
     private const string PaginatorTypeName = "MegaCrit.Sts2.Core.Nodes.Screens.Settings.NPaginator";
-    private const string PaginateArrowTypeName = "MegaCrit.Sts2.Core.Nodes.Screens.Settings.NPaginateArrow";
     private const string ProfileButtonTypeName = "MegaCrit.Sts2.Core.Nodes.Screens.ProfileScreen.NProfileButton";
+    private const string TreasureHandImageCollectionTypeName = "MegaCrit.Sts2.Core.Nodes.Screens.TreasureRoomRelic.NHandImageCollection";
     private static readonly string[] ImmediateReconcileSaveMethods =
     [
         "SavePrefsFile",
@@ -34,6 +34,7 @@ internal static class VanillaModeCompatibilityPatches
     private static bool _applied;
     private static bool _loggedDetection;
     private static bool _loggedForcedModdedFalse;
+    private static bool _loggedTreasureRoomPeerInputGuard;
 
     public static bool IsCompatibilityModeEnabled
     {
@@ -143,17 +144,29 @@ internal static class VanillaModeCompatibilityPatches
             "_Ready",
             nameof(ProfileButtonReadyPostfix));
 
-        PatchMethodsByName(
+        PatchMethodsByNameWithFinalizer(
             harmony,
-            PaginatorTypeName,
-            "OnIndexChanged",
-            nameof(PaginatorIndexChangedPostfix));
+            TreasureHandImageCollectionTypeName,
+            "UpdateHandVisibility",
+            nameof(TreasureRoomPeerInputFinalizer));
 
         PatchMethodsByNameWithPrefix(
             harmony,
-            PaginateArrowTypeName,
-            "OnRelease",
-            nameof(PaginateArrowOnReleasePrefix));
+            PaginatorTypeName,
+            "_Ready",
+            nameof(PaginatorReadyPrefix));
+
+        PatchMethodsByNameWithPrefix(
+            harmony,
+            PaginatorTypeName,
+            "OnIndexChanged",
+            nameof(PaginatorIndexChangedPrefix));
+
+        PatchMethodsByNameWithPrefix(
+            harmony,
+            PaginatorTypeName,
+            "IndexChangeHelper",
+            nameof(PaginatorIndexChangeHelperPrefix));
     }
 
     private static void PatchMethodsByName(
@@ -252,6 +265,41 @@ internal static class VanillaModeCompatibilityPatches
         Log.Info(
             $"[BetterSaves] Patched property getter '{type.FullName}.{propertyName}' " +
             $"returning '{getter.ReturnType.FullName}'.");
+    }
+
+    private static void PatchMethodsByNameWithFinalizer(
+        Harmony harmony,
+        string typeName,
+        string methodName,
+        string finalizerName)
+    {
+        var type = AccessTools.TypeByName(typeName);
+        if (type is null)
+        {
+            Log.Info($"[BetterSaves] Could not find type '{typeName}' for patch '{methodName}'.");
+            return;
+        }
+
+        var methods = AccessTools.GetDeclaredMethods(type)
+            .Where(method => method.Name == methodName)
+            .ToList();
+
+        if (methods.Count == 0)
+        {
+            Log.Info($"[BetterSaves] Could not find method '{typeName}.{methodName}'.");
+            return;
+        }
+
+        var finalizer = new HarmonyMethod(
+            AccessTools.DeclaredMethod(typeof(VanillaModeCompatibilityPatches), finalizerName));
+
+        foreach (var method in methods)
+        {
+            harmony.Patch(method, finalizer: finalizer);
+            Log.Info(
+                $"[BetterSaves] Patched '{method.DeclaringType?.FullName}.{method.Name}' " +
+                $"with finalizer returning '{method.ReturnType.FullName}'.");
+        }
     }
 
     private static void GetGameplayRelevantModNameListPostfix(ref List<string>? __result)
@@ -392,14 +440,42 @@ internal static class VanillaModeCompatibilityPatches
         }
     }
 
-    private static void PaginatorIndexChangedPostfix(object __instance)
+    private static bool PaginatorReadyPrefix(object __instance)
     {
-        ModdingScreenSettingsUi.HandleNativePaginatorIndexChanged(__instance);
+        return !ModdingScreenSettingsUi.HandleNativePaginatorReady(__instance);
     }
 
-    private static bool PaginateArrowOnReleasePrefix(object __instance)
+    private static bool PaginatorIndexChangedPrefix(object __instance, int index)
     {
-        return !ModdingScreenSettingsUi.HandleNativePaginateArrowRelease(__instance);
+        return !ModdingScreenSettingsUi.HandleNativePaginatorIndexChanged(__instance, index);
+    }
+
+    private static bool PaginatorIndexChangeHelperPrefix(object __instance, bool pagedLeft)
+    {
+        return !ModdingScreenSettingsUi.HandleNativePaginatorIndexChangeHelper(__instance, pagedLeft);
+    }
+
+    private static Exception? TreasureRoomPeerInputFinalizer(Exception? __exception)
+    {
+        if (__exception is not InvalidOperationException invalidOperationException)
+        {
+            return __exception;
+        }
+
+        if (!invalidOperationException.Message.Contains("PeerInputState for non-existent player", StringComparison.Ordinal))
+        {
+            return __exception;
+        }
+
+        if (!_loggedTreasureRoomPeerInputGuard)
+        {
+            _loggedTreasureRoomPeerInputGuard = true;
+            Log.Info(
+                "[BetterSaves] Suppressed a treasure room multiplayer input exception caused by a stale peer state. " +
+                "Treasure room interaction will continue without remote hand visibility updates.");
+        }
+
+        return null;
     }
 
     private static string NormalizeProfileScopedPath(string path)
