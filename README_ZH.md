@@ -1,10 +1,12 @@
 # 更好的存档 BetterSaves
 
-中文文档。英文版请见 [README.md](./README.md)。
+中文文档，英文版请见 [**English**](README.md)。
 
-`BetterSaves` 是一个《杀戮尖塔 2》模组，用来在原版存档和模组存档之间进行互通。
+![Version](https://img.shields.io/badge/Version-0.1.2-blue.svg)
+![Game](https://img.shields.io/badge/Slay_The_Spire_2-Mod-red.svg)
+![Platform](https://img.shields.io/badge/Platform-Windows%20-lightgrey.svg)
 
-当前版本：`0.1.2`
+`BetterSaves` 是一个《杀戮尖塔 2》模组，可用于原版存档和模组存档之间进行互通。
 
 ## 功能
 
