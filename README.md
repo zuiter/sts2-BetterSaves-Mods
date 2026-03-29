@@ -1,4 +1,4 @@
-# BetterSaves
+# 更好的存档 BetterSaves
 
 English documentation. For Chinese, see [README_ZH.md](./README_ZH.md).
 
