@@ -9,7 +9,6 @@ English documentation. For Chinese,
 
 `BetterSaves` is a Slay the Spire 2 mod that keeps vanilla saves and modded saves in sync.
 
-Current version: `0.1.2`
 
 ## Features
 
