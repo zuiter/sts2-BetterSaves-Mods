@@ -1,6 +1,11 @@
 # 更好的存档 BetterSaves
 
-English documentation. For Chinese, see [README_ZH.md](./README_ZH.md).
+English documentation. For Chinese,
+[**简体中文**](README_ZH.md)
+
+![Version](https://img.shields.io/badge/Version-0.1.2-blue.svg)
+![Game](https://img.shields.io/badge/Slay_The_Spire_2-Mod-red.svg)
+![Platform](https://img.shields.io/badge/Platform-Windows%20-lightgrey.svg)
 
 `BetterSaves` is a Slay the Spire 2 mod that keeps vanilla saves and modded saves in sync.
 
