@@ -394,14 +394,15 @@ internal static class VanillaModeCompatibilityPatches
 
     private static void ImmediateReconcilePostfix(MethodBase __originalMethod)
     {
-        if (CompletedRunCleanupMethods.Contains(__originalMethod.Name, StringComparer.Ordinal))
+        if (CompletedRunCleanupMethods.Contains(__originalMethod.Name, StringComparer.Ordinal)
+            && BetterSavesConfig.IsSaveSyncEnabled)
         {
             SaveInteropService.PurgeCompletedCurrentRun(
                 $"save hook: {__originalMethod.Name}",
                 isMultiplayer: false);
         }
 
-        if (!BetterSavesConfig.IsFullSyncEnabled)
+        if (!ShouldReconcileForMethod(__originalMethod.Name))
         {
             return;
         }
@@ -413,6 +414,11 @@ internal static class VanillaModeCompatibilityPatches
 
     private static void DeleteCurrentRunPostfix(MethodBase __originalMethod)
     {
+        if (!BetterSavesConfig.IsSaveSyncEnabled)
+        {
+            return;
+        }
+
         SaveInteropService.PropagateCurrentRunDeletion(
             $"save hook: {__originalMethod.Name}",
             isMultiplayer: false,
@@ -421,6 +427,11 @@ internal static class VanillaModeCompatibilityPatches
 
     private static void DeleteCurrentMultiplayerRunPostfix(MethodBase __originalMethod)
     {
+        if (!BetterSavesConfig.IsSaveSyncEnabled)
+        {
+            return;
+        }
+
         SaveInteropService.PropagateCurrentRunDeletion(
             $"save hook: {__originalMethod.Name}",
             isMultiplayer: true,
@@ -429,8 +440,7 @@ internal static class VanillaModeCompatibilityPatches
 
     private static void ImmediateReconcileTaskPostfix(ref Task? __result, MethodBase __originalMethod)
     {
-        if (!BetterSavesConfig.IsFullSyncEnabled
-            && !string.Equals(__originalMethod.Name, "SyncCloudToLocal", StringComparison.Ordinal))
+        if (!ShouldReconcileForMethod(__originalMethod.Name))
         {
             return;
         }
@@ -479,6 +489,24 @@ internal static class VanillaModeCompatibilityPatches
         return string.Equals(methodName, "SyncCloudToLocal", StringComparison.Ordinal)
             ? StartupReconcilePreference
             : GetCurrentReconcilePreference();
+    }
+
+    private static bool ShouldReconcileForMethod(string methodName)
+    {
+        return methodName switch
+        {
+            "SyncCloudToLocal" => true,
+            "SaveRun" => BetterSavesConfig.IsSaveSyncEnabled,
+            "EndSaveBatch" => BetterSavesConfig.IsSaveSyncEnabled,
+            "DeleteCurrentRun" => BetterSavesConfig.IsSaveSyncEnabled,
+            "DeleteCurrentMultiplayerRun" => BetterSavesConfig.IsSaveSyncEnabled,
+            "SaveRunHistory" => BetterSavesConfig.IsDataSyncEnabled,
+            "SaveProgressFile" => BetterSavesConfig.IsDataSyncEnabled,
+            "SavePrefsFile" => BetterSavesConfig.IsSettingsSyncEnabled,
+            "SaveProfile" => false,
+            "SaveSettings" => false,
+            _ => BetterSavesConfig.IsFullSyncEnabled
+        };
     }
 
     private static void SettingsScreenReadyPostfix(object __instance)

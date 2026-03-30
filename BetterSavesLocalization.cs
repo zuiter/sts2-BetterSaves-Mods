@@ -14,14 +14,14 @@ internal static class BetterSavesLocalization
 
     public static string GetPanelTitle()
     {
-        return IsChinese() ? "BetterSaves\u4e92\u901a\u6a21\u5f0f" : "BetterSaves Interop Mode";
+        return IsChinese() ? "BetterSaves互通模式" : "BetterSaves Interop Mode";
     }
 
     public static string GetPanelDescription()
     {
         return IsChinese()
-            ? "切换 BetterSaves 的互通范围。仅同步当前局只同步当前进行中的 run；完整同步会同步整个存档位的数据。"
-            : "Choose how much BetterSaves syncs. Only Current Run mirrors the active run only; Full Sync mirrors the entire save slot.";
+            ? "选择 BetterSaves 的互通范围。仅同步存档只同步当前局存档；仅同步数据只同步时间线、发现与历史等数据；完整同步会同步两者。仅同步数据模式不会把镜像结果额外写回 Steam 云。"
+            : "Choose what BetterSaves syncs. Save Only mirrors run saves only; Data Only mirrors timeline, discoveries, and history; Full Sync mirrors both. Data Only does not push mirrored data back into Steam Cloud.";
     }
 
     public static string GetModeDisplayName(SyncMode mode)
@@ -30,15 +30,17 @@ internal static class BetterSavesLocalization
         {
             return mode switch
             {
-                SyncMode.CurrentRunOnly => "\u4ec5\u540c\u6b65\u5f53\u524d\u5c40",
-                SyncMode.FullSync => "\u5b8c\u6574\u540c\u6b65",
+                SyncMode.SaveOnly => "仅同步存档",
+                SyncMode.DataOnly => "仅同步数据",
+                SyncMode.FullSync => "完整同步",
                 _ => mode.ToString()
             };
         }
 
         return mode switch
         {
-            SyncMode.CurrentRunOnly => "Only Current Run",
+            SyncMode.SaveOnly => "Save Only",
+            SyncMode.DataOnly => "Data Only",
             SyncMode.FullSync => "Full Sync",
             _ => mode.ToString()
         };
@@ -50,18 +52,21 @@ internal static class BetterSavesLocalization
         {
             return mode switch
             {
-                SyncMode.CurrentRunOnly => "\u53ea\u540c\u6b65\u6b63\u5728\u8fdb\u884c\u4e2d\u7684\u5b58\u6863\uff0c\u4e0d\u540c\u6b65\u89e3\u9501\u3001\u65f6\u95f4\u7ebf\u3001\u5386\u53f2\u8bb0\u5f55\u548c\u8bbe\u7f6e\u3002",
-                SyncMode.FullSync => "\u540c\u6b65\u8be5\u5b58\u6863\u4f4d\u4e0b\u7684\u5168\u90e8\u6570\u636e\uff0c\u5305\u62ec\u8fdb\u5ea6\u3001\u5386\u53f2\u8bb0\u5f55\u548c\u56de\u653e\u6587\u4ef6\u3002",
+                SyncMode.SaveOnly => "只同步当前进行中的存档文件，不同步时间线、发现、历史记录和设置。",
+                SyncMode.DataOnly => "只同步时间线、发现、历史记录等数据，不同步当前局存档文件，也不会把镜像后的数据额外写回 Steam 云。",
+                SyncMode.FullSync => "同步存档文件与数据两部分内容，包括进度、历史记录和回放文件。",
                 _ => string.Empty
             };
         }
 
         return mode switch
         {
-            SyncMode.CurrentRunOnly =>
-                "Syncs only the in-progress run save and leaves unlocks, timeline, history, and settings alone.",
+            SyncMode.SaveOnly =>
+                "Syncs only the in-progress run save files and leaves progression, timeline, history, and settings alone.",
+            SyncMode.DataOnly =>
+                "Syncs timeline, discoveries, and history data, but does not sync the in-progress run save files or push mirrored data back into Steam Cloud.",
             SyncMode.FullSync =>
-                "Syncs all profile-scoped save data, including progression, history, and replay files.",
+                "Syncs both save files and profile data, including progression, history, and replay files.",
             _ => string.Empty
         };
     }
@@ -71,7 +76,7 @@ internal static class BetterSavesLocalization
         var isVanilla = VanillaModeCompatibilityPatches.IsCompatibilityModeEnabled;
         if (IsChinese())
         {
-            return isVanilla ? "\u539f\u7248\u5b58\u6863" : "\u6a21\u7ec4\u5b58\u6863";
+            return isVanilla ? "原版存档" : "模组存档";
         }
 
         return isVanilla ? "Vanilla Save" : "Modded Save";

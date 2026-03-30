@@ -13,12 +13,25 @@ internal static class SaveInteropService
         ModdedToVanilla
     }
 
-    private static readonly HashSet<string> CurrentRunOnlyPaths =
+    private static readonly HashSet<string> SaveOnlyPaths =
         new(StringComparer.OrdinalIgnoreCase)
         {
             "saves/current_run.save",
             "saves/current_run.save.backup"
         };
+
+    private static readonly HashSet<string> DataOnlyExactPaths =
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            "saves/progress.save",
+            "saves/progress.save.backup"
+        };
+
+    private static readonly string[] DataOnlyPrefixes =
+    [
+        "saves/history/",
+        "saves/replays/"
+    ];
 
     private static readonly HashSet<string> IgnoredPaths =
         new(StringComparer.OrdinalIgnoreCase)
@@ -32,6 +45,7 @@ internal static class SaveInteropService
         {
             "SavePrefsFile",
             "SaveProgressFile",
+            "SaveRunHistory",
             "SaveRun",
             "EndSaveBatch",
             "DeleteCurrentRun",
@@ -396,11 +410,21 @@ internal static class SaveInteropService
                 return;
             }
 
-            BetterSavesConfig.SetPreferredProfileId(true, currentProfileId.Value);
-            BetterSavesConfig.SetPreferredProfileId(false, currentProfileId.Value);
-            Log.Info(
-                $"[BetterSaves] Recorded shared preferred profile {currentProfileId.Value} " +
-                $"from {(vanillaMode ? "vanilla" : "modded")} activity ({reason}).");
+            if (BetterSavesConfig.UsesSharedProfileSelection)
+            {
+                BetterSavesConfig.SetPreferredProfileId(true, currentProfileId.Value);
+                BetterSavesConfig.SetPreferredProfileId(false, currentProfileId.Value);
+                Log.Info(
+                    $"[BetterSaves] Recorded shared preferred profile {currentProfileId.Value} " +
+                    $"from {(vanillaMode ? "vanilla" : "modded")} activity ({reason}).");
+            }
+            else
+            {
+                BetterSavesConfig.SetPreferredProfileId(vanillaMode, currentProfileId.Value);
+                Log.Info(
+                    $"[BetterSaves] Recorded {(vanillaMode ? "vanilla" : "modded")} preferred profile {currentProfileId.Value} " +
+                    $"({reason}).");
+            }
         }
 
         public void RestorePreferredProfileSelection(bool vanillaMode)
@@ -411,11 +435,76 @@ internal static class SaveInteropService
                 return;
             }
 
-            BetterSavesConfig.SetPreferredProfileId(true, currentProfileId.Value);
-            BetterSavesConfig.SetPreferredProfileId(false, currentProfileId.Value);
+            if (BetterSavesConfig.CurrentMode == SyncMode.SaveOnly
+                && TryRealignSaveOnlyProfileSelection(vanillaMode, currentProfileId.Value))
+            {
+                return;
+            }
+
+            if (BetterSavesConfig.UsesSharedProfileSelection)
+            {
+                BetterSavesConfig.SetPreferredProfileId(true, currentProfileId.Value);
+                BetterSavesConfig.SetPreferredProfileId(false, currentProfileId.Value);
+                Log.Info(
+                    $"[BetterSaves] Keeping current {(vanillaMode ? "vanilla" : "modded")} profile {currentProfileId.Value} " +
+                    "and syncing preferred profile state to match profile.save.");
+            }
+            else
+            {
+                var preferredProfileId = BetterSavesConfig.GetPreferredProfileId(vanillaMode);
+                if (preferredProfileId is >= 1 and <= 3 && preferredProfileId != currentProfileId.Value)
+                {
+                    SetActiveProfileIndex(
+                        preferredProfileId,
+                        $"restoring {(vanillaMode ? "vanilla" : "modded")} preferred profile");
+                    return;
+                }
+
+                BetterSavesConfig.SetPreferredProfileId(vanillaMode, currentProfileId.Value);
+                Log.Info(
+                    $"[BetterSaves] Keeping current {(vanillaMode ? "vanilla" : "modded")} profile {currentProfileId.Value} " +
+                    "for mode-specific profile selection.");
+            }
+        }
+
+        private bool TryRealignSaveOnlyProfileSelection(bool vanillaMode, int currentProfileId)
+        {
+            if (!HasSinglePlayerCurrentRun(currentProfileId, vanillaMode))
+            {
+                return false;
+            }
+
+            var currentScore = GetProfileProgressScore(currentProfileId, vanillaMode);
+            var recoveryCandidate = Enumerable.Range(1, 3)
+                .Where(index => index != currentProfileId)
+                .Select(index => new
+                {
+                    ProfileIndex = index,
+                    Score = GetProfileProgressScore(index, vanillaMode)
+                })
+                .Where(entry => entry.Score >= 16384 && entry.Score >= Math.Max(1, currentScore) * 4)
+                .OrderByDescending(entry => entry.Score)
+                .ThenBy(entry => entry.ProfileIndex)
+                .FirstOrDefault();
+
+            if (recoveryCandidate is null)
+            {
+                return false;
+            }
+
+            CopyCurrentRunBetweenProfiles(currentProfileId, recoveryCandidate.ProfileIndex, vanillaMode);
+            CopyCurrentRunBetweenProfiles(currentProfileId, recoveryCandidate.ProfileIndex, !vanillaMode);
+
+            SetActiveProfileIndex(
+                recoveryCandidate.ProfileIndex,
+                $"realigning save-only profile selection from low-data slot {currentProfileId}");
+
+            BetterSavesConfig.SetPreferredProfileId(true, recoveryCandidate.ProfileIndex);
+            BetterSavesConfig.SetPreferredProfileId(false, recoveryCandidate.ProfileIndex);
             Log.Info(
-                $"[BetterSaves] Keeping current {(vanillaMode ? "vanilla" : "modded")} profile {currentProfileId.Value} " +
-                "and syncing preferred profile state to match profile.save.");
+                $"[BetterSaves] Save-only realignment selected profile {recoveryCandidate.ProfileIndex} " +
+                $"over low-data slot {currentProfileId} (score {currentScore} vs {recoveryCandidate.Score}).");
+            return true;
         }
 
         public void PropagateCurrentRunDeletion(
@@ -491,11 +580,14 @@ internal static class SaveInteropService
                 return;
             }
 
-            TryPurgeCompletedCurrentRunPair(
-                vanillaProfileDir,
-                moddedProfileDir,
-                reason,
-                isMultiplayer: false);
+            if (BetterSavesConfig.IsSaveSyncEnabled)
+            {
+                TryPurgeCompletedCurrentRunPair(
+                    vanillaProfileDir,
+                    moddedProfileDir,
+                    reason,
+                    isMultiplayer: false);
+            }
 
             if (preference == ReconcilePreference.VanillaToModded)
             {
@@ -742,9 +834,7 @@ internal static class SaveInteropService
 
         private long GetProfileProgressScore(int profileIndex, bool vanillaMode)
         {
-            var profileDir = Path.Combine(
-                _accountRoot,
-                vanillaMode ? $"profile{profileIndex}" : Path.Combine("modded", $"profile{profileIndex}"));
+            var profileDir = GetProfileDirectory(profileIndex, vanillaMode);
             var progressSavePath = Path.Combine(profileDir, "saves", "progress.save");
 
             if (!File.Exists(progressSavePath))
@@ -762,14 +852,46 @@ internal static class SaveInteropService
             }
         }
 
-        private bool IsPlaceholderProfileSlot(int profileIndex, bool vanillaMode)
+        private bool HasSinglePlayerCurrentRun(int profileIndex, bool vanillaMode)
         {
-            var profileDir = Path.Combine(
-                _accountRoot,
-                vanillaMode ? $"profile{profileIndex}" : Path.Combine("modded", $"profile{profileIndex}"));
-            return IsPlaceholderProfileDirectory(profileDir);
+            var profileDir = GetProfileDirectory(profileIndex, vanillaMode);
+            return GetCurrentRunPairPaths(profileDir, isMultiplayer: false).Any(File.Exists);
         }
 
+        private void CopyCurrentRunBetweenProfiles(int sourceProfileIndex, int targetProfileIndex, bool vanillaMode)
+        {
+            if (sourceProfileIndex == targetProfileIndex)
+            {
+                return;
+            }
+
+            var sourceProfileDir = GetProfileDirectory(sourceProfileIndex, vanillaMode);
+            var targetProfileDir = GetProfileDirectory(targetProfileIndex, vanillaMode);
+
+            foreach (var fileName in new[] { "current_run.save", "current_run.save.backup" })
+            {
+                var sourcePath = Path.Combine(sourceProfileDir, "saves", fileName);
+                if (!File.Exists(sourcePath))
+                {
+                    continue;
+                }
+
+                var targetPath = Path.Combine(targetProfileDir, "saves", fileName);
+                if (File.Exists(targetPath))
+                {
+                    continue;
+                }
+
+                CopyFileSafely(sourcePath, targetPath, "save-only profile realignment");
+            }
+        }
+
+        private string GetProfileDirectory(int profileIndex, bool vanillaMode)
+        {
+            return Path.Combine(
+                _accountRoot,
+                vanillaMode ? $"profile{profileIndex}" : Path.Combine("modded", $"profile{profileIndex}"));
+        }
 
         private void CopyTreeOneWay(string sourceRoot, string targetRoot, string reason)
         {
@@ -960,7 +1082,31 @@ internal static class SaveInteropService
                 return false;
             }
 
-            return BetterSavesConfig.IsFullSyncEnabled || CurrentRunOnlyPaths.Contains(normalized);
+            return BetterSavesConfig.CurrentMode switch
+            {
+                SyncMode.SaveOnly => SaveOnlyPaths.Contains(normalized),
+                SyncMode.DataOnly => IsDataOnlyProfileRelativePath(normalized),
+                SyncMode.FullSync => !IsEphemeralProfileRelativePath(normalized),
+                _ => false
+            };
+        }
+
+        private static bool IsDataOnlyProfileRelativePath(string normalizedProfileRelativePath)
+        {
+            if (IsEphemeralProfileRelativePath(normalizedProfileRelativePath))
+            {
+                return false;
+            }
+
+            return DataOnlyExactPaths.Contains(normalizedProfileRelativePath)
+                || DataOnlyPrefixes.Any(prefix =>
+                    normalizedProfileRelativePath.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
+        }
+
+        private static bool IsEphemeralProfileRelativePath(string normalizedProfileRelativePath)
+        {
+            return normalizedProfileRelativePath.Contains(".tmp", StringComparison.OrdinalIgnoreCase)
+                || normalizedProfileRelativePath.Contains(".backup.backup", StringComparison.OrdinalIgnoreCase);
         }
 
         private bool TryGetProfileRelativePath(string sourcePath, out string profileRelativePath)
@@ -1209,11 +1355,21 @@ internal static class SaveInteropService
                 return;
             }
 
-            BetterSavesConfig.SetPreferredProfileId(true, profileIndex);
-            BetterSavesConfig.SetPreferredProfileId(false, profileIndex);
-            Log.Info(
-                $"[BetterSaves] Recorded shared preferred profile {profileIndex} " +
-                $"from {(vanillaMode ? "vanilla" : "modded")} path '{sourcePath}' ({reason}).");
+            if (BetterSavesConfig.UsesSharedProfileSelection)
+            {
+                BetterSavesConfig.SetPreferredProfileId(true, profileIndex);
+                BetterSavesConfig.SetPreferredProfileId(false, profileIndex);
+                Log.Info(
+                    $"[BetterSaves] Recorded shared preferred profile {profileIndex} " +
+                    $"from {(vanillaMode ? "vanilla" : "modded")} path '{sourcePath}' ({reason}).");
+            }
+            else
+            {
+                BetterSavesConfig.SetPreferredProfileId(vanillaMode, profileIndex);
+                Log.Info(
+                    $"[BetterSaves] Recorded {(vanillaMode ? "vanilla" : "modded")} preferred profile {profileIndex} " +
+                    $"from path '{sourcePath}' ({reason}).");
+            }
         }
 
         private static bool TryGetSaveHookName(string reason, out string hookName)

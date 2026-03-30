@@ -5,8 +5,9 @@ namespace BetterSaves;
 
 internal enum SyncMode
 {
-    CurrentRunOnly = 0,
-    FullSync = 1
+    SaveOnly = 0,
+    FullSync = 1,
+    DataOnly = 2
 }
 
 internal sealed class BetterSavesConfigData
@@ -39,6 +40,10 @@ internal static class BetterSavesConfig
     }
 
     public static bool IsFullSyncEnabled => CurrentMode == SyncMode.FullSync;
+    public static bool IsSaveSyncEnabled => CurrentMode is SyncMode.SaveOnly or SyncMode.FullSync;
+    public static bool IsDataSyncEnabled => CurrentMode is SyncMode.DataOnly or SyncMode.FullSync;
+    public static bool IsSettingsSyncEnabled => CurrentMode == SyncMode.FullSync;
+    public static bool UsesSharedProfileSelection => CurrentMode != SyncMode.DataOnly;
 
     public static int GetPreferredProfileId(bool vanillaMode)
     {

@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.1.5 - 2026-03-30
+
+### English
+
+- Replaced the old two-mode sync setup with three modes: `Save Only`, `Data Only`, and `Full Sync`.
+- Split save-file syncing from meta-progression syncing so players can choose to mirror only active runs or only progression data such as timeline, discoveries, and history.
+- Refined reconcile hooks and path filtering for the new mode split, reducing accidental cross-mode writes when a mode only intends to sync one category of data.
+- Hardened profile-slot stability across vanilla and modded sessions, including better handling of restart flow, mode switching, and cloud-sync timing.
+- Fixed several destructive slot-realignment edge cases in `Save Only` mode so current-run files are no longer moved or deleted from the wrong slot.
+- Continued cleanup of phantom placeholder slots and related ghost-profile behavior.
+
+### 中文
+
+- 将原本的双模式互通改为三种模式：`仅同步存档`、`仅同步数据` 与 `完整同步`。
+- 将当前局存档同步与元进度数据同步彻底拆开，玩家现在可以只同步进行中的存档，或者只同步时间线、发现、历史记录等数据。
+- 为新的三档模式重构了保存钩子与路径过滤逻辑，降低“本来只想同步一类数据，却误同步到另一类数据”的概率。
+- 进一步增强原版模式与模组模式之间的存档槽位稳定性，改善重启游戏、切换模式和云同步时序下的槽位保持行为。
+- 修复 `仅同步存档` 模式下若干会误搬移或误删除当前局文件的边界情况，避免把当前局从错误槽位移走。
+- 持续清理空白占位槽位与“幽灵存档”行为，进一步降低“幽灵存档”再次出现的概率。
+
 ## 0.1.4 - 2026-03-30
 
 ### English

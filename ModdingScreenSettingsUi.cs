@@ -337,17 +337,13 @@ internal static class ModdingScreenSettingsUi
     private static void CycleBackward()
     {
         Log.Info("[BetterSaves] Sync mode left arrow pressed.");
-        BetterSavesConfig.SetMode(BetterSavesConfig.CurrentMode == SyncMode.CurrentRunOnly
-            ? SyncMode.FullSync
-            : SyncMode.CurrentRunOnly);
+        BetterSavesConfig.SetMode(IndexToMode((ModeToIndex(BetterSavesConfig.CurrentMode) + GetModeDisplayNames().Length - 1) % GetModeDisplayNames().Length));
     }
 
     private static void CycleForward()
     {
         Log.Info("[BetterSaves] Sync mode right arrow pressed.");
-        BetterSavesConfig.SetMode(BetterSavesConfig.CurrentMode == SyncMode.CurrentRunOnly
-            ? SyncMode.FullSync
-            : SyncMode.CurrentRunOnly);
+        BetterSavesConfig.SetMode(IndexToMode((ModeToIndex(BetterSavesConfig.CurrentMode) + 1) % GetModeDisplayNames().Length));
     }
 
     internal static bool HandleNativePaginatorIndexChanged(object? instance, int index)
@@ -541,7 +537,8 @@ internal static class ModdingScreenSettingsUi
     {
         return
         [
-            BetterSavesLocalization.GetModeDisplayName(SyncMode.CurrentRunOnly),
+            BetterSavesLocalization.GetModeDisplayName(SyncMode.SaveOnly),
+            BetterSavesLocalization.GetModeDisplayName(SyncMode.DataOnly),
             BetterSavesLocalization.GetModeDisplayName(SyncMode.FullSync)
         ];
     }
@@ -704,12 +701,24 @@ internal static class ModdingScreenSettingsUi
 
     private static int ModeToIndex(SyncMode mode)
     {
-        return mode == SyncMode.FullSync ? 1 : 0;
+        return mode switch
+        {
+            SyncMode.SaveOnly => 0,
+            SyncMode.DataOnly => 1,
+            SyncMode.FullSync => 2,
+            _ => 0
+        };
     }
 
     private static SyncMode IndexToMode(int index)
     {
-        return index == 1 ? SyncMode.FullSync : SyncMode.CurrentRunOnly;
+        return index switch
+        {
+            0 => SyncMode.SaveOnly,
+            1 => SyncMode.DataOnly,
+            2 => SyncMode.FullSync,
+            _ => SyncMode.SaveOnly
+        };
     }
 
     private static Control? CreateFreshPaginator(Control templatePaginator)

@@ -20,6 +20,11 @@ internal static class CloudMirrorService
                 return;
             }
 
+            if (ShouldSkipCloudMirror(relativePath))
+            {
+                return;
+            }
+
             var bytes = File.ReadAllBytes(targetPath);
             if (!SteamRemoteStorage.FileWrite(relativePath, bytes, bytes.Length))
             {
@@ -41,6 +46,11 @@ internal static class CloudMirrorService
         {
             var relativePath = TryGetCloudRelativePath(accountRoot, targetPath);
             if (relativePath is null)
+            {
+                return;
+            }
+
+            if (ShouldSkipCloudMirror(relativePath))
             {
                 return;
             }
@@ -90,5 +100,19 @@ internal static class CloudMirrorService
         }
 
         return relativePath.Replace('\\', '/');
+    }
+
+    private static bool ShouldSkipCloudMirror(string relativePath)
+    {
+        if (BetterSavesConfig.CurrentMode != SyncMode.DataOnly)
+        {
+            return false;
+        }
+
+        var normalized = relativePath.Replace('\\', '/');
+        return normalized.Contains("/saves/history/", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("/saves/replays/", StringComparison.OrdinalIgnoreCase)
+            || normalized.EndsWith("/saves/progress.save", StringComparison.OrdinalIgnoreCase)
+            || normalized.EndsWith("/saves/progress.save.backup", StringComparison.OrdinalIgnoreCase);
     }
 }
