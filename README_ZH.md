@@ -1,12 +1,12 @@
 # BetterSaves
 
-`BetterSaves` 是一个用于《杀戮尖塔2》的存档互通模组，用来在原版存档与模组存档之间进行同步。
-
 中文文档，英文版请见 [**English**](README.md)。
 
 ![Version](https://img.shields.io/badge/Version-0.1.4-blue.svg)
 ![Game](https://img.shields.io/badge/Slay_The_Spire_2-Mod-red.svg)
 ![Platform](https://img.shields.io/badge/Platform-Windows%20-lightgrey.svg)
+
+`BetterSaves` 是一个用于《杀戮尖塔2》的存档互通模组，用来在原版存档与模组存档之间进行同步。
 
 ## 功能
 
