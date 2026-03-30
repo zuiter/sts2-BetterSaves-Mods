@@ -4,7 +4,7 @@ English documentation. For Simplified Chinese, see [**简体中文**](README_ZH.
 
 ![Version](https://img.shields.io/badge/Version-0.1.5-blue.svg)
 ![Game](https://img.shields.io/badge/Slay_The_Spire_2-Mod-red.svg)
-![Platform](https://img.shields.io/badge/Platform-Windows-lightgrey.svg)
+![Platform](https://img.shields.io/badge/Platform-Windows%20|%20Linux-lightgrey.svg)
 
 `BetterSaves` is a Slay the Spire 2 mod that keeps vanilla saves and modded saves in sync.
 
