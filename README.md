@@ -1,71 +1,51 @@
-# 更好的存档 BetterSaves
+# BetterSaves
 
-English documentation. For Chinese, see [README_ZH.md](./README_ZH.md).
+Chinese documentation is available in [README_ZH.md](./README_ZH.md).
 
 `BetterSaves` is a Slay the Spire 2 mod that keeps vanilla saves and modded saves in sync.
 
-Current version: `0.1.2`
+Current version: `0.1.4`
 
 ## Features
 
 - Bidirectional sync between vanilla and modded save slots
-- When only `BetterSaves` is enabled, the game loads the vanilla save path
-- When other gameplay mods are enabled, the game loads the modded save path
-- An in-game setting lets players switch between two sync modes
-- The profile screen shows whether the current slot is using a vanilla or modded save
+- Vanilla compatibility mode when only `BetterSaves` is enabled
+- In-game sync mode setting with `Only Current Run` and `Full Sync`
+- Profile screen badge that shows whether the current slot is using vanilla or modded saves
 
 ## Sync Modes
 
-The in-game `BetterSaves Interop Mode` setting provides two modes:
-
 - `Only Current Run`
-  Syncs only the active single-player run save
+  Syncs only the currently active single-player run files.
 - `Full Sync`
-  Syncs the supported data under the entire save slot
+  Syncs the supported save data for the whole profile slot.
 
-Notes:
+## Behavior
 
-- Before switching between vanilla and modded play, it is recommended to return to the main menu or quit the game and wait 2 to 3 seconds so the final sync can finish
-- If a large gameplay mod writes custom data that vanilla does not understand, vanilla may still fail to read that expanded save correctly
-
-## Current Behavior
-
-- With only `BetterSaves` enabled
-  The game behaves like vanilla and loads the vanilla save
-- With `BetterSaves` plus other gameplay mods enabled
-  The game behaves like modded and loads the modded save
-- `BetterSaves` syncs data between the two sides
+- When only `BetterSaves` is enabled, the game loads the vanilla save path.
+- When other gameplay mods are enabled, the game loads the modded save path.
+- Switching modes is safest after returning to the main menu or waiting a moment before quitting.
 
 ## Installation
 
-Place the `BetterSaves` folder under the game's `mods` directory:
+Place the mod in:
 
 ```text
-Slay the Spire 2\mods\BetterSaves
+Slay the Spire 2/mods/BetterSaves
 ```
 
-The folder should contain at least:
+## Config
 
-- `BetterSaves.dll`
-- `BetterSaves.json`
-- `BetterSaves.pck`
-
-## Configuration
-
-The config file is saved at:
+The config file is stored at:
 
 ```text
-%AppData%\SlayTheSpire2\mods\BetterSaves\config.json
+%AppData%/SlayTheSpire2/mods/BetterSaves/config.json
 ```
-
-You normally do not need to edit it manually. The in-game setting is enough.
 
 ## Known Limitations
 
-- Multiplayer current-run syncing is currently disabled
-  This was temporarily turned off because stale multiplayer input state could cause treasure room black screens
-- For now, `BetterSaves` should be treated primarily as a single-player save interop mod
-- If a modded environment contains mods that heavily rewrite the save format, vanilla compatibility cannot be guaranteed
+- Multiplayer current-run syncing is still disabled.
+- Steam cloud timing can still affect how quickly newly written files appear on the other side, but the mod now performs additional reconciliation to reduce this.
 
 ## Changelog
 

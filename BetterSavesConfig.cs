@@ -11,7 +11,9 @@ internal enum SyncMode
 
 internal sealed class BetterSavesConfigData
 {
-    public SyncMode SyncMode { get; set; } = SyncMode.CurrentRunOnly;
+    public SyncMode SyncMode { get; set; } = SyncMode.FullSync;
+    public int LastVanillaProfileId { get; set; }
+    public int LastModdedProfileId { get; set; }
 }
 
 internal static class BetterSavesConfig
@@ -38,6 +40,17 @@ internal static class BetterSavesConfig
 
     public static bool IsFullSyncEnabled => CurrentMode == SyncMode.FullSync;
 
+    public static int GetPreferredProfileId(bool vanillaMode)
+    {
+        lock (ConfigLock)
+        {
+            _cached ??= LoadUnsafe();
+            return vanillaMode
+                ? _cached.LastVanillaProfileId
+                : _cached.LastModdedProfileId;
+        }
+    }
+
     public static void SetMode(SyncMode mode)
     {
         lock (ConfigLock)
@@ -55,6 +68,40 @@ internal static class BetterSavesConfig
         SaveInteropService.ReconcileNow(
             $"config change: {mode}",
             VanillaModeCompatibilityPatches.StartupReconcilePreference);
+    }
+
+    public static void SetPreferredProfileId(bool vanillaMode, int profileId)
+    {
+        if (profileId is < 1 or > 3)
+        {
+            return;
+        }
+
+        lock (ConfigLock)
+        {
+            _cached ??= LoadUnsafe();
+
+            if (vanillaMode)
+            {
+                if (_cached.LastVanillaProfileId == profileId)
+                {
+                    return;
+                }
+
+                _cached.LastVanillaProfileId = profileId;
+            }
+            else
+            {
+                if (_cached.LastModdedProfileId == profileId)
+                {
+                    return;
+                }
+
+                _cached.LastModdedProfileId = profileId;
+            }
+
+            SaveUnsafe(_cached);
+        }
     }
 
     private static BetterSavesConfigData LoadUnsafe()

@@ -357,10 +357,9 @@ internal static class ModdingScreenSettingsUi
             return false;
         }
 
-        WritePaginatorIndex(paginator, index);
-        var mode = IndexToMode(index);
-        BetterSavesConfig.SetMode(mode);
-        RefreshNativePaginator(paginator, GetModeDisplayNames(), index);
+        var currentIndex = ModeToIndex(BetterSavesConfig.CurrentMode);
+        WritePaginatorIndex(paginator, currentIndex);
+        RefreshNativePaginator(paginator, GetModeDisplayNames(), currentIndex);
         return true;
     }
 

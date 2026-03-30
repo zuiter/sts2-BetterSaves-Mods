@@ -1,14 +1,66 @@
 # Changelog
 
+## 0.1.4 - 2026-03-30
+
+### English
+
+- Fixed stale `current_run.save` files being restored after abandoning a run.
+- Stopped transient delete events during save-file replacement from wiping the counterpart save.
+- Reworked profile-slot handling between vanilla and modded sessions so slot selection is more stable during mode switching and cloud sync.
+- Added conservative recovery for placeholder profile slots so the mod can return to a mature save slot instead of sticking to an empty one.
+- Changed preferred-slot tracking to follow real save activity, reducing mismatches between vanilla and modded sessions after switching modes.
+- Unified preferred-slot updates so successful saves in either mode align both sides to the same profile slot for interop.
+- Added cleanup for placeholder empty profile slots to prevent phantom empty saves such as an accidental `profile3` from being mirrored or recreated.
+- Fixed cases where restarting the game could jump to the wrong slot instead of staying on the slot selected before quitting.
+- Stopped invalid slot-tracking sources such as profile list enumeration, profile-scoped path enumeration, and broad settings sync passes from overwriting the active slot selection.
+- Adjusted startup recovery to prefer the current valid `profile.save` selection and only fall back when the current slot is clearly just a placeholder save.
+
+### 中文
+
+- 修复放弃游戏后旧的 `current_run.save` 被重新同步回来，导致无法正常开始新游戏的问题。
+- 修复存档文件在重命名替换时产生的临时删除事件会误删另一侧存档的问题。
+- 重构原版模式与模组模式之间的存档槽位处理逻辑，降低模式切换与云同步时跳错槽位的概率。
+- 增加对空白占位存档槽的保守恢复逻辑，避免卡在空档位而无法回到已有进度的成熟存档槽。
+- 调整首选槽位记录方式，使其跟随真实的保存行为更新，减少原版模式和模组模式之间的槽位错位。
+- 将原版与模组的首选槽位对齐到同一个实际使用中的存档槽位，提升两边互通时的稳定性。
+- 增加空白占位存档槽清理，避免像误生成的 `profile3` 这类幽灵空档被镜像出来或反复重建。
+- 修复重进游戏后可能自动跳到错误存档槽位，而不是停留在退出前所选存档的问题。
+- 阻止档案列表枚举、profile 路径枚举以及过宽泛的设置同步流程误改当前槽位选择。
+- 调整启动恢复逻辑，优先保留 `profile.save` 当前指向且有效的存档槽位，只有当前槽位明显是占位空档时才会回退恢复。
+
+## 0.1.3 - 2026-03-29
+
+### English
+
+- Changed the first-run default sync mode to `Full Sync`, so new installs start in full interop mode automatically.
+
+### 中文
+
+- 将首次安装时的默认同步模式改为 `完整同步`，使新安装的模组在首次加载时自动启用完整互通。
+
 ## 0.1.2 - 2026-03-28
+
+### English
 
 - Added a compatibility guard for treasure room hand visibility updates so stale multiplayer peer-input state no longer black-screens chest interactions.
 
+### 中文
+
+- 为宝箱房间中的手部可见性更新增加兼容保护，避免过期的多人输入状态导致开启宝箱时黑屏。
+
 ## 0.1.1 - 2026-03-28
+
+### English
 
 - Temporarily disabled syncing `current_run_mp.save` and `current_run_mp.save.backup` to prevent stale multiplayer state from causing treasure room black-screen issues.
 
+### 中文
+
+- 临时停用 `current_run_mp.save` 与 `current_run_mp.save.backup` 的同步，避免过期的多人状态导致宝箱房黑屏。
+
 ## 0.1.0 - 2026-03-28
+
+### English
 
 - Added bidirectional save interop between vanilla and modded Slay the Spire 2 profiles.
 - Added an in-game sync mode setting with `Only Current Run` and `Full Sync` options.
@@ -16,3 +68,12 @@
 - Added a profile screen badge that shows whether the current profile is using vanilla or modded saves.
 - Unified the settings row styling across vanilla and modded sessions and stabilized paginator behavior.
 - Cleaned up obsolete experimental settings UI code paths and removed the unused custom arrow/audio prototype.
+
+### 中文
+
+- 增加《杀戮尖塔2》原版档与模组档之间的双向存档互通。
+- 增加游戏内同步模式设置，提供 `仅同步当前局` 与 `完整同步` 两种选项。
+- 增加原版兼容模式，使只启用 `BetterSaves` 时会读取原版存档路径。
+- 在存档界面增加标识，用于显示当前档位读取的是原版存档还是模组存档。
+- 统一原版模式与模组模式下的设置项样式，并稳定分页切换交互。
+- 清理已废弃的实验性设置界面代码，并移除未使用的自定义箭头与音效原型。

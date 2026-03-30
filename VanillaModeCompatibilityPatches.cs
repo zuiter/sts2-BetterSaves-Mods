@@ -23,9 +23,14 @@ internal static class VanillaModeCompatibilityPatches
         "SaveProgressFile",
         "SaveRunHistory",
         "SaveSettings",
-        "EndSaveBatch",
-        "DeleteCurrentRun",
-        "DeleteCurrentMultiplayerRun"
+        "EndSaveBatch"
+    ];
+
+    private static readonly string[] CompletedRunCleanupMethods =
+    [
+        "SaveRunHistory",
+        "SaveProgressFile",
+        "EndSaveBatch"
     ];
 
     private static readonly object StateLock = new();
@@ -54,7 +59,7 @@ internal static class VanillaModeCompatibilityPatches
 
     public static SaveInteropService.ReconcilePreference StartupReconcilePreference =>
         ShouldForceVanillaMode()
-            ? SaveInteropService.ReconcilePreference.VanillaToModded
+            ? SaveInteropService.ReconcilePreference.Auto
             : SaveInteropService.ReconcilePreference.Auto;
 
     public static void Apply(Harmony harmony)
@@ -131,6 +136,18 @@ internal static class VanillaModeCompatibilityPatches
             SaveManagerTypeName,
             "SyncCloudToLocal",
             nameof(ImmediateReconcileTaskPostfix));
+
+        PatchMethodsByName(
+            harmony,
+            SaveManagerTypeName,
+            "DeleteCurrentRun",
+            nameof(DeleteCurrentRunPostfix));
+
+        PatchMethodsByName(
+            harmony,
+            SaveManagerTypeName,
+            "DeleteCurrentMultiplayerRun",
+            nameof(DeleteCurrentMultiplayerRunPostfix));
 
         PatchMethodsByName(
             harmony,
@@ -359,30 +376,65 @@ internal static class VanillaModeCompatibilityPatches
 
     private static void ProfileScopedPathPostfix(ref string? __result)
     {
-        if (!ShouldForceVanillaMode() || string.IsNullOrEmpty(__result))
+        if (string.IsNullOrEmpty(__result))
         {
             return;
         }
 
-        var normalized = NormalizeProfileScopedPath(__result);
-        if (normalized == __result)
+        if (ShouldForceVanillaMode())
         {
-            return;
+            var normalized = NormalizeProfileScopedPath(__result);
+            if (normalized != __result)
+            {
+                Log.Info($"[BetterSaves] Rewriting profile-scoped path '{__result}' to '{normalized}'.");
+                __result = normalized;
+            }
         }
-
-        Log.Info($"[BetterSaves] Rewriting profile-scoped path '{__result}' to '{normalized}'.");
-        __result = normalized;
     }
 
     private static void ImmediateReconcilePostfix(MethodBase __originalMethod)
     {
+        if (CompletedRunCleanupMethods.Contains(__originalMethod.Name, StringComparer.Ordinal))
+        {
+            SaveInteropService.PurgeCompletedCurrentRun(
+                $"save hook: {__originalMethod.Name}",
+                isMultiplayer: false);
+        }
+
+        if (!BetterSavesConfig.IsFullSyncEnabled)
+        {
+            return;
+        }
+
         SaveInteropService.ReconcileNow(
             $"save hook: {__originalMethod.Name}",
             GetCurrentReconcilePreference());
     }
 
+    private static void DeleteCurrentRunPostfix(MethodBase __originalMethod)
+    {
+        SaveInteropService.PropagateCurrentRunDeletion(
+            $"save hook: {__originalMethod.Name}",
+            isMultiplayer: false,
+            GetCurrentReconcilePreference());
+    }
+
+    private static void DeleteCurrentMultiplayerRunPostfix(MethodBase __originalMethod)
+    {
+        SaveInteropService.PropagateCurrentRunDeletion(
+            $"save hook: {__originalMethod.Name}",
+            isMultiplayer: true,
+            GetCurrentReconcilePreference());
+    }
+
     private static void ImmediateReconcileTaskPostfix(ref Task? __result, MethodBase __originalMethod)
     {
+        if (!BetterSavesConfig.IsFullSyncEnabled
+            && !string.Equals(__originalMethod.Name, "SyncCloudToLocal", StringComparison.Ordinal))
+        {
+            return;
+        }
+
         if (__result is null)
         {
             SaveInteropService.ReconcileNow(
@@ -406,6 +458,11 @@ internal static class VanillaModeCompatibilityPatches
         }
         finally
         {
+            if (string.Equals(methodName, "SyncCloudToLocal", StringComparison.Ordinal))
+            {
+                SaveInteropService.RestorePreferredProfileSelectionForCurrentMode();
+            }
+
             SaveInteropService.ReconcileNow(
                 $"save hook: {methodName}",
                 GetTaskReconcilePreference(methodName));
