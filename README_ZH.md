@@ -4,7 +4,7 @@
 
 ![Version](https://img.shields.io/badge/Version-0.1.5-blue.svg)
 ![Game](https://img.shields.io/badge/Slay_The_Spire_2-Mod-red.svg)
-![Platform](https://img.shields.io/badge/Platform-Windows-lightgrey.svg)
+![Platform](https://img.shields.io/badge/Platform-Windows-lightgrey.svg%20|%20Linux-lightgrey.svg)
 
 `BetterSaves` 是一个用于《杀戮尖塔 2》的存档互通模组，用来在原版存档与模组存档之间进行同步。
 
@@ -45,6 +45,31 @@ Slay the Spire 2/mods/BetterSaves
 ```text
 %AppData%/SlayTheSpire2/mods/BetterSaves/config.json
 ```
+
+### Linux (Ubuntu)
+
+Linux 的模组目录结构和 Windows 基本一致，但不同发行版里游戏可执行文件和 Godot 命令名可能不同。
+
+1. 从 **Releases** 页面下载最新的 `BetterSaves-[version].zip` 压缩包。
+2. 解压并将内部的 `BetterSaves` 文件夹整体复制到游戏的：
+   ```
+   <Slay the Spire 2>/mods/
+   ```
+3. 正常通过 Steam 或本地可执行文件启动游戏即可。
+4. 启动游戏后，模组将自动启用。
+
+> **兼容性说明：** 所有玩家仍然必须使用同一版本的模组；但现在允许每个人本地设置的人数上限不同，真正生效的入房人数以上主机配置为准。
+
+> **Linux 排错：** 如果模组启动时因为 Harmony / `mm-exhelper.so` 报 `_Unwind_RaiseException` 而初始化失败，通常是系统运行库没有被游戏进程正确看到。一般安装 `libgcc-s1`、`libstdc++6` 和 `libunwind8` 就够了。
+>
+> **沙箱化 Linux（NixOS、Flatpak 等）：** 如果你的 Steam 在沙箱中运行，即使已安装运行库也可能无法被游戏进程访问。请在 Steam 启动选项中添加：
+> ```
+> LD_PRELOAD+=":/path/to/libgcc_s.so.1" %command%
+> ```
+> 将 `/path/to/` 替换为你系统上的实际路径。NixOS + nix-ld 示例：
+> ```
+> LD_PRELOAD+=":/run/current-system/sw/share/nix-ld/lib/libgcc_s.so.1" %command%
+> ```
 
 ## 已知限制
 
