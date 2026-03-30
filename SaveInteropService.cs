@@ -136,51 +136,16 @@ internal static class SaveInteropService
                 return;
             }
 
-                    lock (InitLock)
-                    {
-                        foreach (var syncRoot in SyncRoots)
-                        {
-                            syncRoot.ReconcileAllProfiles(
-                                $"delayed pass after {delay.TotalSeconds:0}s",
-                                VanillaModeCompatibilityPatches.StartupReconcilePreference);
-                        }
-                    }
-        }
-    }
-
-    public static void RequestImmediateReconcile(
-        string reason,
-        ReconcilePreference preference = ReconcilePreference.Auto)
-    {
-        if (!_initialized)
-        {
-            return;
-        }
-
-        _ = Task.Run(async () =>
-        {
-            try
+            lock (InitLock)
             {
-                await Task.Delay(250, ReconcileCancellation.Token);
-                await ImmediateReconcileSemaphore.WaitAsync(ReconcileCancellation.Token);
-
-                try
+                foreach (var syncRoot in SyncRoots)
                 {
-                    ReconcileAllProfilesUnsafe(reason, preference);
-                }
-                finally
-                {
-                    ImmediateReconcileSemaphore.Release();
+                    syncRoot.ReconcileAllProfiles(
+                        $"delayed pass after {delay.TotalSeconds:0}s",
+                        VanillaModeCompatibilityPatches.StartupReconcilePreference);
                 }
             }
-            catch (OperationCanceledException)
-            {
-            }
-            catch (Exception ex)
-            {
-                Log.Info($"[BetterSaves] Immediate reconcile failed ({reason}): {ex}");
-            }
-        });
+        }
     }
 
     public static void ReconcileNow(
@@ -253,24 +218,6 @@ internal static class SaveInteropService
         finally
         {
             ImmediateReconcileSemaphore.Release();
-        }
-    }
-
-    public static void RecordPreferredProfileSelectionForCurrentMode(string reason)
-    {
-        if (!_initialized)
-        {
-            return;
-        }
-
-        var vanillaMode = VanillaModeCompatibilityPatches.IsCompatibilityModeEnabled;
-
-        lock (InitLock)
-        {
-            foreach (var syncRoot in GetLikelyActiveSyncRoots())
-            {
-                syncRoot.RecordPreferredProfileSelection(vanillaMode, reason);
-            }
         }
     }
 
@@ -400,31 +347,6 @@ internal static class SaveInteropService
                 }
                 .Select(path => File.Exists(path) ? File.GetLastWriteTimeUtc(path) : DateTime.MinValue)
                 .Max();
-        }
-
-        public void RecordPreferredProfileSelection(bool vanillaMode, string reason)
-        {
-            var currentProfileId = TryGetActiveProfileIndex();
-            if (currentProfileId is null)
-            {
-                return;
-            }
-
-            if (BetterSavesConfig.UsesSharedProfileSelection)
-            {
-                BetterSavesConfig.SetPreferredProfileId(true, currentProfileId.Value);
-                BetterSavesConfig.SetPreferredProfileId(false, currentProfileId.Value);
-                Log.Info(
-                    $"[BetterSaves] Recorded shared preferred profile {currentProfileId.Value} " +
-                    $"from {(vanillaMode ? "vanilla" : "modded")} activity ({reason}).");
-            }
-            else
-            {
-                BetterSavesConfig.SetPreferredProfileId(vanillaMode, currentProfileId.Value);
-                Log.Info(
-                    $"[BetterSaves] Recorded {(vanillaMode ? "vanilla" : "modded")} preferred profile {currentProfileId.Value} " +
-                    $"({reason}).");
-            }
         }
 
         public void RestorePreferredProfileSelection(bool vanillaMode)
