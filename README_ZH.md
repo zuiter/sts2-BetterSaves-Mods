@@ -4,7 +4,7 @@
 
 ![Version](https://img.shields.io/badge/Version-0.1.5-blue.svg)
 ![Game](https://img.shields.io/badge/Slay_The_Spire_2-Mod-red.svg)
-![Platform](https://img.shields.io/badge/Platform-Windows-lightgrey.svg|%20Linux-lightgrey.svg)
+![Platform](https://img.shields.io/badge/Platform-Windows-lightgrey.svg|Linux-lightgrey.svg)
 
 `BetterSaves` 是一个用于《杀戮尖塔 2》的存档互通模组，用来在原版存档与模组存档之间进行同步。
 
