@@ -39,6 +39,7 @@ internal static class VanillaModeCompatibilityPatches
     private static bool _applied;
     private static bool _loggedDetection;
     private static bool _loggedForcedModdedFalse;
+    private static bool _loggedGameplayRelevantDecision;
     private static bool _loggedTreasureRoomPeerInputGuard;
 
     public static bool IsCompatibilityModeEnabled
@@ -327,15 +328,31 @@ internal static class VanillaModeCompatibilityPatches
         }
 
         var hadBetterSaves = __result.Any(IsBetterSavesId);
+        var original = __result.ToList();
         var filtered = __result
             .Where(modId => !IsBetterSavesId(modId))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        __result = filtered;
-
         var shouldForceVanillaMode = filtered.Count == 0 && (hadBetterSaves || DetectOnlyBetterSavesLoaded());
         SetCompatibilityMode(shouldForceVanillaMode, "GetGameplayRelevantModNameList");
+
+        if (!_loggedGameplayRelevantDecision)
+        {
+            _loggedGameplayRelevantDecision = true;
+            var originalText = original.Count == 0 ? "<none>" : string.Join(", ", original);
+            var filteredText = filtered.Count == 0 ? "<none>" : string.Join(", ", filtered);
+            Log.Info(
+                $"[BetterSaves] Gameplay-relevant mod list decision. " +
+                $"Original: {originalText}. Filtered: {filteredText}. Force vanilla: {shouldForceVanillaMode}.");
+        }
+
+        if (!shouldForceVanillaMode)
+        {
+            return;
+        }
+
+        __result = filtered;
     }
 
     private static void IsRunningModdedPostfix(ref bool __result)
@@ -574,17 +591,18 @@ internal static class VanillaModeCompatibilityPatches
 
     private static bool ShouldForceVanillaMode()
     {
+        var detected = DetectOnlyBetterSavesLoaded();
+
         lock (StateLock)
         {
-            if (_compatibilityMode.HasValue)
+            if (!_compatibilityMode.HasValue || _compatibilityMode.Value != detected)
             {
-                return _compatibilityMode.Value;
+                _compatibilityMode = detected;
+                Log.Info($"[BetterSaves] Vanilla compatibility mode = {detected} (assembly scan refresh).");
             }
-        }
 
-        var detected = DetectOnlyBetterSavesLoaded();
-        SetCompatibilityMode(detected, "assembly scan");
-        return detected;
+            return _compatibilityMode.Value;
+        }
     }
 
     private static void SetCompatibilityMode(bool enabled, string source)
