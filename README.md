@@ -74,7 +74,7 @@ Linux uses the same mod folder layout as Windows, but the game executable and Go
 
 ## Known Limitations
 
-- Multiplayer current-run syncing is still disabled.
+- Multiplayer Mode syncing is still disabled.
 - Steam cloud timing can still affect how quickly newly written files appear on the other side, but the mod performs additional reconciliation to reduce this.
 
 ## Changelog
