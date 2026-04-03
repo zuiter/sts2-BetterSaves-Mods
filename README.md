@@ -2,7 +2,7 @@
 
 English documentation. For Simplified Chinese, see [**简体中文**](README_ZH.md).
 
-![Version](https://img.shields.io/badge/Version-0.1.5-blue.svg)
+![Version](https://img.shields.io/badge/Version-0.1.6-blue.svg)
 ![Game](https://img.shields.io/badge/Slay_The_Spire_2-Mod-red.svg)
 ![Platform](https://img.shields.io/badge/Platform-Windows%20|%20Linux-lightgrey.svg)
 
@@ -74,7 +74,7 @@ Linux uses the same mod folder layout as Windows, but the game executable and Go
 
 ## Known Limitations
 
-- Multiplayer Mode syncing is still disabled.
+- Multiplayer current-run interop is more fragile than single-player interop because modded and vanilla multiplayer sessions may use different local player identifiers.
 - Steam cloud timing can still affect how quickly newly written files appear on the other side, but the mod performs additional reconciliation to reduce this.
 
 ## Changelog

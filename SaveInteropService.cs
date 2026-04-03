@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
+using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using MegaCrit.Sts2.Core.Logging;
 
 namespace BetterSaves;
@@ -17,7 +19,9 @@ internal static class SaveInteropService
         new(StringComparer.OrdinalIgnoreCase)
         {
             "saves/current_run.save",
-            "saves/current_run.save.backup"
+            "saves/current_run.save.backup",
+            "saves/current_run_mp.save",
+            "saves/current_run_mp.save.backup"
         };
 
     private static readonly HashSet<string> DataOnlyExactPaths =
@@ -32,13 +36,6 @@ internal static class SaveInteropService
         "saves/history/",
         "saves/replays/"
     ];
-
-    private static readonly HashSet<string> IgnoredPaths =
-        new(StringComparer.OrdinalIgnoreCase)
-        {
-            "saves/current_run_mp.save",
-            "saves/current_run_mp.save.backup"
-        };
 
     private static readonly HashSet<string> ProfileSelectionRecordingHooks =
         new(StringComparer.OrdinalIgnoreCase)
@@ -999,11 +996,6 @@ internal static class SaveInteropService
         private static bool IsSyncableProfileRelativePath(string profileRelativePath)
         {
             var normalized = NormalizeRelativePath(profileRelativePath);
-            if (IgnoredPaths.Contains(normalized))
-            {
-                return false;
-            }
-
             return BetterSavesConfig.CurrentMode switch
             {
                 SyncMode.SaveOnly => SaveOnlyPaths.Contains(normalized),
@@ -1028,6 +1020,7 @@ internal static class SaveInteropService
         private static bool IsEphemeralProfileRelativePath(string normalizedProfileRelativePath)
         {
             return normalizedProfileRelativePath.Contains(".tmp", StringComparison.OrdinalIgnoreCase)
+                || normalizedProfileRelativePath.Contains(".val.corrupt", StringComparison.OrdinalIgnoreCase)
                 || normalizedProfileRelativePath.Contains(".backup.backup", StringComparison.OrdinalIgnoreCase);
         }
 
@@ -1240,6 +1233,12 @@ internal static class SaveInteropService
                     return;
                 }
 
+                if (TryNormalizeMultiplayerRunForTarget(sourcePath, targetPath, content, out var normalizedContent, out var normalizationLog))
+                {
+                    content = normalizedContent;
+                    Log.Info($"[BetterSaves] {normalizationLog}");
+                }
+
                 if (TargetAlreadyMatches(targetPath, content.LongLength, lastWriteTimeUtc))
                 {
                     return;
@@ -1386,6 +1385,473 @@ internal static class SaveInteropService
             return normalized.EndsWith("/saves/current_run.save", StringComparison.OrdinalIgnoreCase)
                 || normalized.EndsWith("/saves/current_run.save.backup", StringComparison.OrdinalIgnoreCase);
         }
+
+        private static bool IsMultiplayerCurrentRunPath(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return false;
+            }
+
+            var normalized = path.Replace('\\', '/');
+            return normalized.EndsWith("/saves/current_run_mp.save", StringComparison.OrdinalIgnoreCase)
+                || normalized.EndsWith("/saves/current_run_mp.save.backup", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private bool TryGetLocalSteamId(out ulong localSteamId)
+        {
+            localSteamId = default;
+
+            try
+            {
+                var accountDirectory = new DirectoryInfo(_accountRoot).Name;
+                return ulong.TryParse(accountDirectory, out localSteamId);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private bool TryNormalizeMultiplayerRunForTarget(
+            string sourcePath,
+            string targetPath,
+            byte[] sourceContent,
+            out byte[] normalizedContent,
+            out string logMessage)
+        {
+            normalizedContent = sourceContent;
+            logMessage = string.Empty;
+
+            if (!IsMultiplayerCurrentRunPath(sourcePath))
+            {
+                return false;
+            }
+
+            if (!TryGetLocalSteamId(out var localSteamId))
+            {
+                return false;
+            }
+
+            if (!TryGetMultiplayerParticipantIds(sourceContent, out var participantIds) || participantIds.Count == 0)
+            {
+                return false;
+            }
+
+            if (!TryGetProfileIndexAndModeFromPath(targetPath, out var targetProfileIndex, out var targetVanillaMode))
+            {
+                return false;
+            }
+
+            var sourceProfileDir = TryGetProfileDirectory(sourcePath);
+            if (string.IsNullOrEmpty(sourceProfileDir)
+                || !TryGetSinglePlayerRunSignature(sourceProfileDir, out var localSignature))
+            {
+                return false;
+            }
+
+            if (targetVanillaMode)
+            {
+                if (participantIds.Contains(localSteamId))
+                {
+                    return false;
+                }
+
+                if (!TryMatchLocalMultiplayerPlayerId(sourceContent, localSignature, out var sourceLocalPlayerId))
+                {
+                    return false;
+                }
+
+                if (IsModdedPath(sourcePath) && sourceLocalPlayerId != localSteamId)
+                {
+                    BetterSavesConfig.SetModdedMultiplayerLocalPlayerId(targetProfileIndex, sourceLocalPlayerId);
+                }
+
+                if (!TryRewriteMultiplayerPlayerIds(sourceContent, sourceLocalPlayerId, localSteamId, out normalizedContent))
+                {
+                    normalizedContent = sourceContent;
+                    return false;
+                }
+
+                logMessage =
+                    $"Normalized multiplayer run IDs for vanilla target '{targetPath}' by rewriting local player ID " +
+                    $"{sourceLocalPlayerId} -> {localSteamId}.";
+                return true;
+            }
+
+            if (!participantIds.Contains(localSteamId))
+            {
+                return false;
+            }
+
+            if (!TryGetModdedMultiplayerLocalPlayerId(targetProfileIndex, localSignature, localSteamId, out var moddedLocalPlayerId)
+                || moddedLocalPlayerId == 0
+                || moddedLocalPlayerId == localSteamId)
+            {
+                return false;
+            }
+
+            if (!TryRewriteMultiplayerPlayerIds(sourceContent, localSteamId, moddedLocalPlayerId, out normalizedContent))
+            {
+                normalizedContent = sourceContent;
+                return false;
+            }
+
+            logMessage =
+                $"Normalized multiplayer run IDs for modded target '{targetPath}' by rewriting local player ID " +
+                $"{localSteamId} -> {moddedLocalPlayerId}.";
+            return true;
+        }
+
+        private bool TryGetModdedMultiplayerLocalPlayerId(
+            int profileIndex,
+            RunSignature localSignature,
+            ulong localSteamId,
+            out ulong moddedLocalPlayerId)
+        {
+            moddedLocalPlayerId = BetterSavesConfig.GetModdedMultiplayerLocalPlayerId(profileIndex);
+            if (moddedLocalPlayerId != 0)
+            {
+                return true;
+            }
+
+            var moddedProfileDir = GetProfileDirectory(profileIndex, vanillaMode: false);
+            var savesDir = Path.Combine(moddedProfileDir, "saves");
+            if (!Directory.Exists(savesDir))
+            {
+                return false;
+            }
+
+            foreach (var path in Directory.EnumerateFiles(savesDir, "current_run_mp*", SearchOption.TopDirectoryOnly)
+                         .OrderByDescending(path => File.GetLastWriteTimeUtc(path)))
+            {
+                if (!TryReadStableFile(path, out var content, out _)
+                    || !TryGetMultiplayerParticipantIds(content, out var participantIds)
+                    || participantIds.Count == 0
+                    || participantIds.Contains(localSteamId))
+                {
+                    continue;
+                }
+
+                if (!TryMatchLocalMultiplayerPlayerId(content, localSignature, out moddedLocalPlayerId)
+                    || moddedLocalPlayerId == 0
+                    || moddedLocalPlayerId == localSteamId)
+                {
+                    continue;
+                }
+
+                BetterSavesConfig.SetModdedMultiplayerLocalPlayerId(profileIndex, moddedLocalPlayerId);
+                return true;
+            }
+
+            moddedLocalPlayerId = 0;
+            return false;
+        }
+
+        private static bool TryGetMultiplayerParticipantIds(byte[] content, out HashSet<ulong> participantIds)
+        {
+            participantIds = [];
+
+            try
+            {
+                using var document = JsonDocument.Parse(content);
+                if (!document.RootElement.TryGetProperty("players", out var playersElement)
+                    || playersElement.ValueKind != JsonValueKind.Array)
+                {
+                    return false;
+                }
+
+                foreach (var playerElement in playersElement.EnumerateArray())
+                {
+                    if (!playerElement.TryGetProperty("net_id", out var netIdElement))
+                    {
+                        continue;
+                    }
+
+                    if (TryGetUInt64(netIdElement, out var participantId))
+                    {
+                        participantIds.Add(participantId);
+                    }
+                }
+
+                return participantIds.Count > 0;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private bool TryGetSinglePlayerRunSignature(string profileDir, out RunSignature signature)
+        {
+            signature = default;
+
+            foreach (var path in GetCurrentRunPairPaths(profileDir, isMultiplayer: false))
+            {
+                if (!File.Exists(path) || !TryReadStableFile(path, out var content, out _))
+                {
+                    continue;
+                }
+
+                if (TryParseRunSignature(content, out signature))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool TryMatchLocalMultiplayerPlayerId(
+            byte[] multiplayerRunContent,
+            RunSignature localSignature,
+            out ulong localPlayerId)
+        {
+            localPlayerId = default;
+
+            try
+            {
+                using var document = JsonDocument.Parse(multiplayerRunContent);
+                if (!document.RootElement.TryGetProperty("players", out var playersElement)
+                    || playersElement.ValueKind != JsonValueKind.Array)
+                {
+                    return false;
+                }
+
+                ulong bestPlayerId = default;
+                var bestScore = int.MinValue;
+                var bestCount = 0;
+
+                foreach (var playerElement in playersElement.EnumerateArray())
+                {
+                    if (!playerElement.TryGetProperty("net_id", out var netIdElement)
+                        || !TryGetUInt64(netIdElement, out var candidatePlayerId)
+                        || !TryParseRunSignature(playerElement, out var candidateSignature))
+                    {
+                        continue;
+                    }
+
+                    var score = ScoreRunSignatureMatch(localSignature, candidateSignature);
+                    if (score > bestScore)
+                    {
+                        bestScore = score;
+                        bestPlayerId = candidatePlayerId;
+                        bestCount = 1;
+                    }
+                    else if (score == bestScore)
+                    {
+                        bestCount++;
+                    }
+                }
+
+                if (bestCount != 1 || bestScore < 10)
+                {
+                    return false;
+                }
+
+                localPlayerId = bestPlayerId;
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool TryRewriteMultiplayerPlayerIds(byte[] originalContent, ulong oldPlayerId, ulong newPlayerId, out byte[] rewrittenContent)
+        {
+            rewrittenContent = originalContent;
+
+            try
+            {
+                var rootNode = JsonNode.Parse(originalContent);
+                if (rootNode is null)
+                {
+                    return false;
+                }
+
+                var changed = RewriteMultiplayerPlayerIdsRecursive(rootNode, oldPlayerId, newPlayerId);
+                if (!changed)
+                {
+                    return false;
+                }
+
+                rewrittenContent = Encoding.UTF8.GetBytes(rootNode.ToJsonString(new JsonSerializerOptions
+                {
+                    WriteIndented = true
+                }));
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool RewriteMultiplayerPlayerIdsRecursive(JsonNode node, ulong oldPlayerId, ulong newPlayerId)
+        {
+            var changed = false;
+
+            switch (node)
+            {
+                case JsonObject obj:
+                    foreach (var kvp in obj.ToList())
+                    {
+                        if (kvp.Value is null)
+                        {
+                            continue;
+                        }
+
+                        if ((string.Equals(kvp.Key, "net_id", StringComparison.OrdinalIgnoreCase)
+                             || string.Equals(kvp.Key, "player_id", StringComparison.OrdinalIgnoreCase))
+                            && TryGetUInt64(kvp.Value, out var currentId)
+                            && currentId == oldPlayerId)
+                        {
+                            obj[kvp.Key] = JsonValue.Create(newPlayerId);
+                            changed = true;
+                            continue;
+                        }
+
+                        changed |= RewriteMultiplayerPlayerIdsRecursive(kvp.Value, oldPlayerId, newPlayerId);
+                    }
+
+                    break;
+
+                case JsonArray array:
+                    foreach (var child in array)
+                    {
+                        if (child is null)
+                        {
+                            continue;
+                        }
+
+                        changed |= RewriteMultiplayerPlayerIdsRecursive(child, oldPlayerId, newPlayerId);
+                    }
+
+                    break;
+            }
+
+            return changed;
+        }
+
+        private static bool TryParseRunSignature(byte[] content, out RunSignature signature)
+        {
+            signature = default;
+
+            try
+            {
+                using var document = JsonDocument.Parse(content);
+                if (TryParseRunSignature(document.RootElement, out signature))
+                {
+                    return true;
+                }
+
+                if (document.RootElement.TryGetProperty("players", out var playersElement)
+                    && playersElement.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var playerElement in playersElement.EnumerateArray())
+                    {
+                        if (TryParseRunSignature(playerElement, out signature))
+                        {
+                            return true;
+                        }
+                    }
+                }
+
+                return false;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool TryParseRunSignature(JsonElement element, out RunSignature signature)
+        {
+            signature = default;
+
+            if (!element.TryGetProperty("character_id", out var characterIdElement)
+                || !element.TryGetProperty("current_hp", out var currentHpElement)
+                || !element.TryGetProperty("max_hp", out var maxHpElement)
+                || !element.TryGetProperty("gold", out var goldElement)
+                || !element.TryGetProperty("deck", out var deckElement)
+                || characterIdElement.ValueKind != JsonValueKind.String
+                || deckElement.ValueKind != JsonValueKind.Array)
+            {
+                return false;
+            }
+
+            signature = new RunSignature(
+                characterIdElement.GetString() ?? string.Empty,
+                currentHpElement.GetInt32(),
+                maxHpElement.GetInt32(),
+                goldElement.GetInt32(),
+                deckElement.GetArrayLength());
+            return !string.IsNullOrWhiteSpace(signature.CharacterId);
+        }
+
+        private static int ScoreRunSignatureMatch(RunSignature localSignature, RunSignature candidateSignature)
+        {
+            var score = 0;
+
+            if (string.Equals(localSignature.CharacterId, candidateSignature.CharacterId, StringComparison.Ordinal))
+            {
+                score += 8;
+            }
+
+            if (localSignature.CurrentHp == candidateSignature.CurrentHp)
+            {
+                score += 4;
+            }
+
+            if (localSignature.MaxHp == candidateSignature.MaxHp)
+            {
+                score += 4;
+            }
+
+            if (localSignature.Gold == candidateSignature.Gold)
+            {
+                score += 2;
+            }
+
+            if (localSignature.DeckCount == candidateSignature.DeckCount)
+            {
+                score += 2;
+            }
+
+            return score;
+        }
+
+        private static bool TryGetUInt64(JsonNode node, out ulong value)
+        {
+            value = default;
+
+            return node switch
+            {
+                JsonValue jsonValue when jsonValue.TryGetValue<ulong>(out value) => true,
+                JsonValue jsonValue when jsonValue.TryGetValue<string>(out var text) && ulong.TryParse(text, out value) => true,
+                _ => false
+            };
+        }
+
+        private static bool TryGetUInt64(JsonElement element, out ulong value)
+        {
+            value = default;
+
+            return element.ValueKind switch
+            {
+                JsonValueKind.Number => element.TryGetUInt64(out value),
+                JsonValueKind.String => ulong.TryParse(element.GetString(), out value),
+                _ => false
+            };
+        }
+
+        private readonly record struct RunSignature(
+            string CharacterId,
+            int CurrentHp,
+            int MaxHp,
+            int Gold,
+            int DeckCount);
 
         private string? TryGetProfileDirectory(string path)
         {

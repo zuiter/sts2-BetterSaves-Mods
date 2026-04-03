@@ -1,5 +1,23 @@
 ﻿# Changelog
 
+## 0.1.6 - 2026-04-03
+
+### English
+
+- Added bidirectional multiplayer current-run interop between modded and vanilla save paths.
+- Re-enabled syncing for current_run_mp.save and current_run_mp.save.backup under save-sync modes.
+- Added multiplayer local-player ID normalization when mirroring multiplayer current runs between modded and vanilla environments.
+- Improved handling of broken multiplayer run artifacts so .VAL.corrupt files are not treated as normal sync targets.
+- Added extra diagnostics around multiplayer current-run syncing to make future compatibility issues easier to trace.
+
+### 中文
+
+- 增加模组多人当前局与原版多人当前局之间的双向互通。
+- 在“存档类同步”模式下重新启用 current_run_mp.save 与 current_run_mp.save.backup 的同步。
+- 增加多人当前局在模组环境与原版环境之间互通时的本机玩家 ID 规范化处理。
+- 改善损坏多人存档的处理方式，不再把 .VAL.corrupt 这类文件当作正常同步目标。
+- 增加多人当前局同步的额外诊断日志，方便后续继续定位兼容性问题。
+
 ## 0.1.5 - 2026-03-30
 
 ### English

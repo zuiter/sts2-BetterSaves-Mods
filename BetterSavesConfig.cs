@@ -15,6 +15,7 @@ internal sealed class BetterSavesConfigData
     public SyncMode SyncMode { get; set; } = SyncMode.FullSync;
     public int LastVanillaProfileId { get; set; }
     public int LastModdedProfileId { get; set; }
+    public Dictionary<string, ulong> ModdedMultiplayerLocalPlayerIds { get; set; } = new();
 }
 
 internal static class BetterSavesConfig
@@ -109,6 +110,43 @@ internal static class BetterSavesConfig
         }
     }
 
+    public static ulong GetModdedMultiplayerLocalPlayerId(int profileId)
+    {
+        if (profileId is < 1 or > 3)
+        {
+            return 0;
+        }
+
+        lock (ConfigLock)
+        {
+            _cached ??= LoadUnsafe();
+            return _cached.ModdedMultiplayerLocalPlayerIds.TryGetValue(profileId.ToString(), out var value)
+                ? value
+                : 0;
+        }
+    }
+
+    public static void SetModdedMultiplayerLocalPlayerId(int profileId, ulong playerId)
+    {
+        if (profileId is < 1 or > 3 || playerId == 0)
+        {
+            return;
+        }
+
+        lock (ConfigLock)
+        {
+            _cached ??= LoadUnsafe();
+            if (_cached.ModdedMultiplayerLocalPlayerIds.TryGetValue(profileId.ToString(), out var existing)
+                && existing == playerId)
+            {
+                return;
+            }
+
+            _cached.ModdedMultiplayerLocalPlayerIds[profileId.ToString()] = playerId;
+            SaveUnsafe(_cached);
+        }
+    }
+
     private static BetterSavesConfigData LoadUnsafe()
     {
         try
@@ -122,8 +160,10 @@ internal static class BetterSavesConfig
             }
 
             var json = File.ReadAllText(configPath);
-            return JsonSerializer.Deserialize<BetterSavesConfigData>(json, JsonOptions)
+            var config = JsonSerializer.Deserialize<BetterSavesConfigData>(json, JsonOptions)
                 ?? new BetterSavesConfigData();
+            config.ModdedMultiplayerLocalPlayerIds ??= new Dictionary<string, ulong>();
+            return config;
         }
         catch (Exception ex)
         {
