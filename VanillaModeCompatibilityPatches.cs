@@ -16,6 +16,8 @@ internal static class VanillaModeCompatibilityPatches
     private const string PaginatorTypeName = "MegaCrit.Sts2.Core.Nodes.Screens.Settings.NPaginator";
     private const string ProfileButtonTypeName = "MegaCrit.Sts2.Core.Nodes.Screens.ProfileScreen.NProfileButton";
     private const string TreasureHandImageCollectionTypeName = "MegaCrit.Sts2.Core.Nodes.Screens.TreasureRoomRelic.NHandImageCollection";
+    private const string DebugInfoLabelManagerTypeName = "MegaCrit.Sts2.Core.Nodes.Debug.NDebugInfoLabelManager";
+    private const string DevConsoleTypeName = "MegaCrit.Sts2.Core.Nodes.Debug.NDevConsole";
     private static readonly string[] ImmediateReconcileSaveMethods =
     [
         "SavePrefsFile",
@@ -40,6 +42,8 @@ internal static class VanillaModeCompatibilityPatches
     private static bool _loggedDetection;
     private static bool _loggedForcedModdedFalse;
     private static bool _loggedGameplayRelevantDecision;
+    private static bool _loggedDebugInfoSuppressed;
+    private static bool _loggedConsoleCommandPrune;
     private static bool _loggedTreasureRoomPeerInputGuard;
 
     public static bool IsCompatibilityModeEnabled
@@ -55,7 +59,7 @@ internal static class VanillaModeCompatibilityPatches
 
     public static SaveInteropService.ReconcilePreference CurrentReconcilePreference =>
         ShouldForceVanillaMode()
-            ? SaveInteropService.ReconcilePreference.VanillaToModded
+            ? SaveInteropService.ReconcilePreference.Auto
             : SaveInteropService.ReconcilePreference.ModdedToVanilla;
 
     public static SaveInteropService.ReconcilePreference StartupReconcilePreference =>
@@ -82,6 +86,12 @@ internal static class VanillaModeCompatibilityPatches
             nameof(GetGameplayRelevantModNameListPostfix));
 
         PatchMethodsByName(
+            harmony,
+            ModManagerTypeName,
+            "IsRunningModded",
+            nameof(IsRunningModdedPostfix));
+
+        PatchPropertyGetter(
             harmony,
             ModManagerTypeName,
             "IsRunningModded",
@@ -161,6 +171,24 @@ internal static class VanillaModeCompatibilityPatches
             ProfileButtonTypeName,
             "_Ready",
             nameof(ProfileButtonReadyPostfix));
+
+        PatchMethodsByName(
+            harmony,
+            DebugInfoLabelManagerTypeName,
+            "_Ready",
+            nameof(DebugInfoLabelManagerPostfix));
+
+        PatchMethodsByName(
+            harmony,
+            DebugInfoLabelManagerTypeName,
+            "UpdateText",
+            nameof(DebugInfoLabelManagerPostfix));
+
+        PatchMethodsByName(
+            harmony,
+            DevConsoleTypeName,
+            "_Ready",
+            nameof(DevConsoleReadyPostfix));
 
         PatchMethodsByNameWithFinalizer(
             harmony,
@@ -542,6 +570,26 @@ internal static class VanillaModeCompatibilityPatches
         }
     }
 
+    private static void DebugInfoLabelManagerPostfix(object __instance)
+    {
+        if (!ShouldForceVanillaMode())
+        {
+            return;
+        }
+
+        ApplyVanillaCompatibilityUiState(__instance);
+    }
+
+    private static void DevConsoleReadyPostfix(object __instance)
+    {
+        if (!ShouldForceVanillaMode())
+        {
+            return;
+        }
+
+        PruneCompatibilityConsoleCommands(__instance);
+    }
+
     private static bool PaginatorReadyPrefix(object __instance)
     {
         return !ModdingScreenSettingsUi.HandleNativePaginatorReady(__instance);
@@ -618,6 +666,80 @@ internal static class VanillaModeCompatibilityPatches
     private static IEnumerable<Mod> FilterMods(IEnumerable<Mod> mods)
     {
         return mods.Where(ShouldKeepMod).ToList();
+    }
+
+    private static void ApplyVanillaCompatibilityUiState(object instance)
+    {
+        var type = instance.GetType();
+
+        var runningModdedField = AccessTools.Field(type, "_runningModded");
+        if (runningModdedField is not null)
+        {
+            runningModdedField.SetValue(instance, false);
+        }
+
+        var moddedWarningField = AccessTools.Field(type, "_moddedWarning");
+        if (moddedWarningField?.GetValue(instance) is CanvasItem moddedWarning)
+        {
+            moddedWarning.Visible = false;
+        }
+
+        if (!_loggedDebugInfoSuppressed)
+        {
+            _loggedDebugInfoSuppressed = true;
+            Log.Info(
+                "[BetterSaves] Suppressed the in-game modded warning label while BetterSaves is running in vanilla compatibility mode.");
+        }
+    }
+
+    private static void PruneCompatibilityConsoleCommands(object instance)
+    {
+        try
+        {
+            var devConsoleField = AccessTools.Field(instance.GetType(), "_devConsole");
+            var devConsole = devConsoleField?.GetValue(instance);
+            if (devConsole is null)
+            {
+                return;
+            }
+
+            var commandsField = AccessTools.Field(devConsole.GetType(), "_commands");
+            if (commandsField?.GetValue(devConsole) is not System.Collections.IDictionary commands)
+            {
+                return;
+            }
+
+            var keysToRemove = new List<object>();
+            foreach (System.Collections.DictionaryEntry entry in commands)
+            {
+                if (entry.Value is null)
+                {
+                    continue;
+                }
+
+                var debugOnlyProperty = AccessTools.Property(entry.Value.GetType(), "DebugOnly");
+                if (debugOnlyProperty?.GetValue(entry.Value) is bool debugOnly && debugOnly)
+                {
+                    keysToRemove.Add(entry.Key);
+                }
+            }
+
+            foreach (var key in keysToRemove)
+            {
+                commands.Remove(key);
+            }
+
+            if (!_loggedConsoleCommandPrune)
+            {
+                _loggedConsoleCommandPrune = true;
+                Log.Info(
+                    $"[BetterSaves] Pruned {keysToRemove.Count} debug-only dev-console commands while running in vanilla compatibility mode.");
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Info($"[BetterSaves] Failed to prune compatibility-mode console commands: {ex}");
+        }
     }
 
     private static bool DetectOnlyBetterSavesLoaded()

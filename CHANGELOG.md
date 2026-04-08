@@ -1,6 +1,6 @@
 ﻿# Changelog
 
-## 0.1.6 - 2026-04-03
+## 0.1.7 - 2026-04-08
 
 ### English
 
@@ -9,6 +9,10 @@
 - Added multiplayer local-player ID normalization when mirroring multiplayer current runs between modded and vanilla environments.
 - Improved handling of broken multiplayer run artifacts so .VAL.corrupt files are not treated as normal sync targets.
 - Added extra diagnostics around multiplayer current-run syncing to make future compatibility issues easier to trace.
+- Fixed vanilla-compatibility sync direction so when only `BetterSaves` is enabled, profile data can mirror in the correct direction instead of getting stuck effectively one-way.
+- Fixed compatibility-mode current-run deletion propagation so abandon/cleanup can clear both save roots when the active direction is auto-resolved.
+- Suppressed the bottom-right modded warning label in vanilla compatibility mode for the 0.99.1 release branch.
+- Pruned debug-only dev-console commands in vanilla compatibility mode so the vanilla console no longer exposes modded-only commands.
 
 ### 中文
 
@@ -17,6 +21,10 @@
 - 增加多人当前局在模组环境与原版环境之间互通时的本机玩家 ID 规范化处理。
 - 改善损坏多人存档的处理方式，不再把 .VAL.corrupt 这类文件当作正常同步目标。
 - 增加多人当前局同步的额外诊断日志，方便后续继续定位兼容性问题。
+- 修复只启用 `BetterSaves` 时的原版兼容模式同步方向问题，避免档案互通卡成“看起来只剩单向同步”。
+- 修复兼容模式下当前局删除传播的问题，使放弃/清理当前局时在自动方向判定下也能同时清理两边存档根。
+- 针对 0.99.1 正式版兼容模式，隐藏右下角的 modded 提示标签。
+- 在原版兼容模式下移除控制台中的 debug-only 命令，避免原版控制台继续暴露模组专用命令。
 
 ## 0.1.5 - 2026-03-30
 

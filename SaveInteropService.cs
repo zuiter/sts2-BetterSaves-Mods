@@ -440,14 +440,15 @@ internal static class SaveInteropService
 
             var vanillaProfileDir = Path.Combine(_accountRoot, $"profile{profileIndex.Value}");
             var moddedProfileDir = Path.Combine(_accountRoot, "modded", $"profile{profileIndex.Value}");
-            var targetRoot = preference switch
+            var targetRoots = preference switch
             {
-                ReconcilePreference.VanillaToModded => moddedProfileDir,
-                ReconcilePreference.ModdedToVanilla => vanillaProfileDir,
-                _ => null
+                ReconcilePreference.VanillaToModded => new[] { moddedProfileDir },
+                ReconcilePreference.ModdedToVanilla => new[] { vanillaProfileDir },
+                ReconcilePreference.Auto => new[] { vanillaProfileDir, moddedProfileDir },
+                _ => Array.Empty<string>()
             };
 
-            if (targetRoot is null)
+            if (targetRoots.Length == 0)
             {
                 Log.Info($"[BetterSaves] Skipped run deletion propagation for unsupported preference '{preference}' ({reason}).");
                 return;
@@ -457,10 +458,13 @@ internal static class SaveInteropService
                 ? new[] { "current_run_mp.save", "current_run_mp.save.backup" }
                 : new[] { "current_run.save", "current_run.save.backup" };
 
-            foreach (var fileName in fileNames)
+            foreach (var targetRoot in targetRoots.Distinct(StringComparer.OrdinalIgnoreCase))
             {
-                var targetPath = Path.Combine(targetRoot, "saves", fileName);
-                DeleteFileSafely(targetPath, reason);
+                foreach (var fileName in fileNames)
+                {
+                    var targetPath = Path.Combine(targetRoot, "saves", fileName);
+                    DeleteFileSafely(targetPath, reason);
+                }
             }
         }
 
