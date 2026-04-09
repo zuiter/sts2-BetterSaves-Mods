@@ -502,6 +502,15 @@ internal static class SaveInteropService
                 return;
             }
 
+            if (TryHandleFreshInstallBootstrapProfilePair(
+                    profileIndex,
+                    vanillaProfileDir,
+                    moddedProfileDir,
+                    reason))
+            {
+                return;
+            }
+
             if (TryCleanupPlaceholderProfilePair(
                     profileIndex,
                     activeProfileIndex,
@@ -545,6 +554,78 @@ internal static class SaveInteropService
                 var moddedPath = Path.Combine(moddedProfileDir, relativeFile);
                 ReconcileFilePair(vanillaPath, moddedPath, reason);
             }
+        }
+
+        private bool TryHandleFreshInstallBootstrapProfilePair(
+            int profileIndex,
+            string vanillaProfileDir,
+            string moddedProfileDir,
+            string reason)
+        {
+            if (!BetterSavesConfig.IsFreshInstallSession || !IsBootstrapReason(reason))
+            {
+                return false;
+            }
+
+            var vanillaState = GetSinglePlayerDataState(vanillaProfileDir);
+            var moddedState = GetSinglePlayerDataState(moddedProfileDir);
+
+            if (!vanillaState.HasAnySinglePlayerData && !moddedState.HasAnySinglePlayerData)
+            {
+                return false;
+            }
+
+            if (vanillaState.IsEstablishedSinglePlayerProfile && !moddedState.IsEstablishedSinglePlayerProfile)
+            {
+                Log.Info(
+                    $"[BetterSaves] Fresh-install bootstrap copied vanilla profile{profileIndex} into modded because " +
+                    $"the modded side looked immature. Vanilla={vanillaState}; Modded={moddedState} ({reason}).");
+                CopyTreeOneWay(vanillaProfileDir, moddedProfileDir, $"fresh-install bootstrap: {reason}");
+                return true;
+            }
+
+            if (!vanillaState.HasAnySinglePlayerData && moddedState.IsEstablishedSinglePlayerProfile)
+            {
+                Log.Info(
+                    $"[BetterSaves] Fresh-install bootstrap copied modded profile{profileIndex} into vanilla because " +
+                    $"the vanilla side had no meaningful single-player data. Vanilla={vanillaState}; Modded={moddedState} ({reason}).");
+                CopyTreeOneWay(moddedProfileDir, vanillaProfileDir, $"fresh-install bootstrap: {reason}");
+                return true;
+            }
+
+            if (vanillaState.IsClearlyRicherThan(moddedState))
+            {
+                Log.Info(
+                    $"[BetterSaves] Fresh-install bootstrap preferred vanilla profile{profileIndex} over modded. " +
+                    $"Vanilla={vanillaState}; Modded={moddedState} ({reason}).");
+                CopyTreeOneWay(vanillaProfileDir, moddedProfileDir, $"fresh-install bootstrap: {reason}");
+                return true;
+            }
+
+            if (moddedState.IsClearlyRicherThan(vanillaState))
+            {
+                Log.Info(
+                    $"[BetterSaves] Fresh-install bootstrap detected existing richer modded profile{profileIndex} and " +
+                    $"skipped automatic overwrite to preserve vanilla. Vanilla={vanillaState}; Modded={moddedState} ({reason}).");
+                return true;
+            }
+
+            if (vanillaState.HasAnySinglePlayerData && moddedState.HasAnySinglePlayerData)
+            {
+                Log.Info(
+                    $"[BetterSaves] Fresh-install bootstrap found existing data on both sides for profile{profileIndex} and " +
+                    $"skipped automatic overwrite because neither side was clearly authoritative. " +
+                    $"Vanilla={vanillaState}; Modded={moddedState} ({reason}).");
+                return true;
+            }
+
+            return false;
+        }
+
+        private static bool IsBootstrapReason(string reason)
+        {
+            return string.Equals(reason, "startup scan", StringComparison.OrdinalIgnoreCase)
+                || reason.StartsWith("delayed pass after ", StringComparison.OrdinalIgnoreCase);
         }
 
         private bool TryCleanupPlaceholderProfilePair(
@@ -2390,6 +2471,20 @@ internal static class SaveInteropService
         bool HasMultiplayerCurrentRun,
         long PrefsLength)
     {
+        public bool HasAnySinglePlayerData =>
+            ProgressLength > 0
+            || PrefsLength > 0
+            || HistoryEntryCount > 0
+            || HasSinglePlayerCurrentRun
+            || HasMultiplayerCurrentRun;
+
+        public long Score =>
+            ProgressLength
+            + (PrefsLength * 4L)
+            + (ProgressCollectionScore * 512L)
+            + (HistoryEntryCount * 4096L)
+            + (HasSinglePlayerCurrentRun ? 131072L : 0L);
+
         public bool IsLowDataSinglePlayerProfile =>
             !HasSinglePlayerCurrentRun
             && HistoryEntryCount <= 4
@@ -2421,11 +2516,30 @@ internal static class SaveInteropService
                 || ProgressLength >= Math.Max(24 * 1024, Math.Max(other.ProgressLength * 2, other.ProgressLength + 8 * 1024));
         }
 
+        public bool IsClearlyRicherThan(SinglePlayerDataState other)
+        {
+            if (!HasAnySinglePlayerData)
+            {
+                return false;
+            }
+
+            if (!other.HasAnySinglePlayerData)
+            {
+                return true;
+            }
+
+            return Score >= Math.Max(24 * 1024L, other.Score * 2L)
+                && (HasSinglePlayerCurrentRun
+                    || HistoryEntryCount > other.HistoryEntryCount
+                    || ProgressLength > other.ProgressLength
+                    || ProgressCollectionScore > other.ProgressCollectionScore);
+        }
+
         public override string ToString()
         {
             return
                 $"progress_len={ProgressLength}, progress_score={ProgressCollectionScore}, history={HistoryEntryCount}, " +
-                $"sp_run={HasSinglePlayerCurrentRun}, mp_run={HasMultiplayerCurrentRun}, prefs_len={PrefsLength}";
+                $"sp_run={HasSinglePlayerCurrentRun}, mp_run={HasMultiplayerCurrentRun}, prefs_len={PrefsLength}, score={Score}";
         }
     }
 }

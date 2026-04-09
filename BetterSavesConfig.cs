@@ -27,6 +27,7 @@ internal static class BetterSavesConfig
     };
 
     private static BetterSavesConfigData? _cached;
+    private static bool _createdThisSession;
 
     public static SyncMode CurrentMode
     {
@@ -45,6 +46,7 @@ internal static class BetterSavesConfig
     public static bool IsDataSyncEnabled => CurrentMode is SyncMode.DataOnly or SyncMode.FullSync;
     public static bool IsSettingsSyncEnabled => CurrentMode == SyncMode.FullSync;
     public static bool UsesSharedProfileSelection => CurrentMode != SyncMode.DataOnly;
+    public static bool IsFreshInstallSession => _createdThisSession;
 
     public static int GetPreferredProfileId(bool vanillaMode)
     {
@@ -154,6 +156,7 @@ internal static class BetterSavesConfig
             var configPath = GetConfigPath();
             if (!File.Exists(configPath))
             {
+                _createdThisSession = true;
                 var defaults = new BetterSavesConfigData();
                 SaveUnsafe(defaults);
                 return defaults;

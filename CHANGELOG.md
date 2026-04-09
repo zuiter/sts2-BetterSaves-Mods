@@ -1,4 +1,17 @@
 ﻿# Changelog
+## 0.1.9 - 2026-04-10
+
+### English
+
+- Added a conservative first-session bootstrap pass for players who install `BetterSaves` after already creating vanilla and/or modded profile data.
+- Startup and delayed bootstrap scans now prefer copying a clearly richer vanilla profile into modded saves, copy modded data back only when vanilla has no meaningful single-player data, and otherwise skip automatic overwrite when both sides already contain real progress.
+- Added bootstrap diagnostics that log whether BetterSaves copied vanilla to modded, copied modded to vanilla, or deliberately skipped a risky first-sync overwrite.
+
+### 中文
+
+- 增加首次接入 `BetterSaves` 时的保守引导逻辑，专门处理玩家在安装本模组之前就已经存在原版档和/或模组档的数据场景。
+- 启动扫描与延迟扫描现在会优先把明显更完整的原版档同步到模组档；只有在原版侧几乎没有有效单人数据时才会反向采用模组档；如果两边都已有真实进度且没有明显唯一权威源，则会跳过自动覆盖，避免首轮互通直接冲掉已有存档。
+- 增加首轮引导日志，明确记录 BetterSaves 在首次同步时是选择了原版→模组、模组→原版，还是为了规避风险而主动跳过自动覆盖。
 
 ## 0.1.8 - 2026-04-09
 

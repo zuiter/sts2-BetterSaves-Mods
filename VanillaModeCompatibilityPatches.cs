@@ -175,19 +175,13 @@ internal static class VanillaModeCompatibilityPatches
         PatchMethodsByName(
             harmony,
             DebugInfoLabelManagerTypeName,
-            "_Ready",
-            nameof(DebugInfoLabelManagerPostfix));
-
-        PatchMethodsByName(
-            harmony,
-            DebugInfoLabelManagerTypeName,
             "UpdateText",
             nameof(DebugInfoLabelManagerPostfix));
 
         PatchMethodsByName(
             harmony,
             DevConsoleTypeName,
-            "_Ready",
+            "ShowConsole",
             nameof(DevConsoleReadyPostfix));
 
         PatchMethodsByNameWithFinalizer(
