@@ -31,6 +31,15 @@ internal static class SaveInteropService
             "saves/progress.save.backup"
         };
 
+    private static readonly HashSet<string> SinglePlayerDataGuardPaths =
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            "saves/progress.save",
+            "saves/progress.save.backup",
+            "saves/prefs.save",
+            "saves/prefs.save.backup"
+        };
+
     private static readonly string[] DataOnlyPrefixes =
     [
         "saves/history/",
@@ -1223,11 +1232,21 @@ internal static class SaveInteropService
                 : SourceSide.Second;
         }
 
-        private void CopyFileSafely(string sourcePath, string targetPath, string reason)
+        private void CopyFileSafely(
+            string sourcePath,
+            string targetPath,
+            string reason,
+            bool allowSinglePlayerDataProtection = true)
         {
             try
             {
                 if (TryPurgeStaleCurrentRunPair(sourcePath, targetPath, reason))
+                {
+                    return;
+                }
+
+                if (allowSinglePlayerDataProtection
+                    && TryProtectLowDataSinglePlayerData(sourcePath, targetPath, reason))
                 {
                     return;
                 }
@@ -1265,6 +1284,54 @@ internal static class SaveInteropService
             {
                 Log.Info($"[BetterSaves] Failed to mirror '{sourcePath}' to '{targetPath}' ({reason}): {ex}");
             }
+        }
+
+        private bool TryProtectLowDataSinglePlayerData(string sourcePath, string targetPath, string reason)
+        {
+            if (!TryGetProfileRelativePath(sourcePath, out var sourceRelativePath)
+                || !TryGetProfileRelativePath(targetPath, out var targetRelativePath))
+            {
+                return false;
+            }
+
+            var normalizedSourceRelativePath = NormalizeRelativePath(sourceRelativePath);
+            if (!normalizedSourceRelativePath.Equals(
+                    NormalizeRelativePath(targetRelativePath),
+                    StringComparison.OrdinalIgnoreCase)
+                || !SinglePlayerDataGuardPaths.Contains(normalizedSourceRelativePath))
+            {
+                return false;
+            }
+
+            var sourceProfileDir = TryGetProfileDirectory(sourcePath);
+            var targetProfileDir = TryGetProfileDirectory(targetPath);
+            if (string.IsNullOrEmpty(sourceProfileDir) || string.IsNullOrEmpty(targetProfileDir))
+            {
+                return false;
+            }
+
+            var sourceState = GetSinglePlayerDataState(sourceProfileDir);
+            var targetState = GetSinglePlayerDataState(targetProfileDir);
+
+            if (!sourceState.IsLowDataSinglePlayerProfile
+                || !targetState.IsMeaningfullyRicherThan(sourceState)
+                || !File.Exists(targetPath))
+            {
+                return false;
+            }
+
+            Log.Info(
+                $"[BetterSaves] Prevented low-data single-player file '{normalizedSourceRelativePath}' " +
+                $"from overwriting a richer counterpart. " +
+                $"Source '{sourceProfileDir}' => {sourceState}; " +
+                $"target '{targetProfileDir}' => {targetState} ({reason}).");
+
+            CopyFileSafely(
+                targetPath,
+                sourcePath,
+                $"protected mature single-player data: {reason}",
+                allowSinglePlayerDataProtection: false);
+            return true;
         }
 
         private void MaybeRecordPreferredProfileFromPath(string sourcePath, string reason)
@@ -1857,6 +1924,88 @@ internal static class SaveInteropService
             int Gold,
             int DeckCount);
 
+        private SinglePlayerDataState GetSinglePlayerDataState(string profileDir)
+        {
+            var savesDir = Path.Combine(profileDir, "saves");
+            var progressSavePath = Path.Combine(savesDir, "progress.save");
+            var prefsSavePath = Path.Combine(savesDir, "prefs.save");
+            var historyDir = Path.Combine(savesDir, "history");
+
+            return new SinglePlayerDataState(
+                GetFileLengthSafe(progressSavePath),
+                GetTopLevelJsonArrayEntryCount(progressSavePath),
+                CountPrimaryHistoryEntries(historyDir),
+                GetCurrentRunPairPaths(profileDir, isMultiplayer: false).Any(File.Exists),
+                GetCurrentRunPairPaths(profileDir, isMultiplayer: true).Any(File.Exists),
+                GetFileLengthSafe(prefsSavePath));
+        }
+
+        private static long GetFileLengthSafe(string path)
+        {
+            if (!File.Exists(path))
+            {
+                return 0;
+            }
+
+            try
+            {
+                return new FileInfo(path).Length;
+            }
+            catch
+            {
+                return 0;
+            }
+        }
+
+        private static int CountPrimaryHistoryEntries(string historyDir)
+        {
+            if (!Directory.Exists(historyDir))
+            {
+                return 0;
+            }
+
+            try
+            {
+                return Directory.EnumerateFiles(historyDir, "*.run", SearchOption.TopDirectoryOnly).Count();
+            }
+            catch
+            {
+                return 0;
+            }
+        }
+
+        private static int GetTopLevelJsonArrayEntryCount(string path)
+        {
+            if (!TryReadStableFile(path, out var content, out _))
+            {
+                return 0;
+            }
+
+            try
+            {
+                using var document = JsonDocument.Parse(content);
+                if (document.RootElement.ValueKind != JsonValueKind.Object)
+                {
+                    return 0;
+                }
+
+                var count = 0;
+                foreach (var property in document.RootElement.EnumerateObject())
+                {
+                    if (property.Value.ValueKind == JsonValueKind.Array)
+                    {
+                        count += property.Value.GetArrayLength();
+                    }
+                }
+
+                return count;
+            }
+            catch
+            {
+                return 0;
+            }
+        }
+
         private string? TryGetProfileDirectory(string path)
         {
             if (string.IsNullOrWhiteSpace(path))
@@ -2230,6 +2379,53 @@ internal static class SaveInteropService
 
             var fileInfo = new FileInfo(path);
             return new FileSnapshot(fileInfo.Length, fileInfo.LastWriteTimeUtc);
+        }
+    }
+
+    private readonly record struct SinglePlayerDataState(
+        long ProgressLength,
+        int ProgressCollectionScore,
+        int HistoryEntryCount,
+        bool HasSinglePlayerCurrentRun,
+        bool HasMultiplayerCurrentRun,
+        long PrefsLength)
+    {
+        public bool IsLowDataSinglePlayerProfile =>
+            !HasSinglePlayerCurrentRun
+            && HistoryEntryCount <= 4
+            && ProgressLength <= 16 * 1024
+            && ProgressCollectionScore <= 32
+            && PrefsLength <= 1024;
+
+        public bool IsEstablishedSinglePlayerProfile =>
+            HasSinglePlayerCurrentRun
+            || HistoryEntryCount >= 12
+            || ProgressLength >= 24 * 1024
+            || ProgressCollectionScore >= 48;
+
+        public bool IsMeaningfullyRicherThan(SinglePlayerDataState other)
+        {
+            if (!IsEstablishedSinglePlayerProfile)
+            {
+                return false;
+            }
+
+            if (!other.IsLowDataSinglePlayerProfile)
+            {
+                return false;
+            }
+
+            return HasSinglePlayerCurrentRun
+                || HistoryEntryCount > other.HistoryEntryCount
+                || ProgressCollectionScore >= Math.Max(48, other.ProgressCollectionScore * 2)
+                || ProgressLength >= Math.Max(24 * 1024, Math.Max(other.ProgressLength * 2, other.ProgressLength + 8 * 1024));
+        }
+
+        public override string ToString()
+        {
+            return
+                $"progress_len={ProgressLength}, progress_score={ProgressCollectionScore}, history={HistoryEntryCount}, " +
+                $"sp_run={HasSinglePlayerCurrentRun}, mp_run={HasMultiplayerCurrentRun}, prefs_len={PrefsLength}";
         }
     }
 }

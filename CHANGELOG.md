@@ -1,5 +1,17 @@
 ﻿# Changelog
 
+## 0.1.8 - 2026-04-09
+
+### English
+
+- Added a low-data single-player save guard so a freshly created modded `progress.save` / `prefs.save` can no longer overwrite a much richer vanilla profile on first modded startup.
+- Added diagnostics that log both sides' single-player save maturity when BetterSaves blocks one of these destructive first-sync overwrites.
+
+### 中文
+
+- 增加“低数据单人档保护”，避免首次带模组启动时新生成的 modded `progress.save` / `prefs.save` 反向覆盖内容更完整的原版单人存档。
+- 增加这类首轮覆盖保护的诊断日志；当 BetterSaves 阻止这类危险同步时，会同时记录两侧单人档的成熟度信息，方便后续继续排查玩家反馈。
+
 ## 0.1.7 - 2026-04-08
 
 ### English
