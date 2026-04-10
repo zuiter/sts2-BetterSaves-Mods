@@ -5,6 +5,8 @@ namespace BetterSaves;
 
 internal static class CloudMirrorService
 {
+    private static bool _loggedDeleteBypass;
+
     public static void MirrorFile(string accountRoot, string targetPath)
     {
         try
@@ -42,6 +44,11 @@ internal static class CloudMirrorService
 
     public static void DeleteFile(string accountRoot, string targetPath)
     {
+        if (ShouldBypassCloudDelete())
+        {
+            return;
+        }
+
         try
         {
             var relativePath = TryGetCloudRelativePath(accountRoot, targetPath);
@@ -72,6 +79,21 @@ internal static class CloudMirrorService
         {
             Log.Info($"[BetterSaves] Failed to delete cloud counterpart for '{targetPath}': {ex}");
         }
+    }
+
+    private static bool ShouldBypassCloudDelete()
+    {
+        if (_loggedDeleteBypass)
+        {
+            return true;
+        }
+
+        _loggedDeleteBypass = true;
+        Log.Info(
+            "[BetterSaves] Direct Steam cloud deletion is disabled. " +
+            "BetterSaves will still upload mirrored counterpart files to Steam cloud, " +
+            "but it will no longer remove cloud files on its own to avoid destructive cross-device sync loss.");
+        return true;
     }
 
     private static string? TryGetCloudRelativePath(string accountRoot, string targetPath)

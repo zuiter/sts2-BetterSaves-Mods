@@ -1,4 +1,18 @@
 ﻿# Changelog
+## 0.2.0 - 2026-04-10
+
+### English
+
+- Restored Steam cloud uploads for mirrored counterpart save files so BetterSaves can keep cross-device vanilla/modded interop in sync again.
+- Disabled BetterSaves-driven Steam cloud deletions so mirrored cleanup can no longer remove files that another device still needs.
+- Rebalanced cloud behavior to preserve cross-device consistency by allowing cloud writes but preventing destructive cloud-side cleanup.
+
+### 中文
+
+- 恢复 BetterSaves 对镜像后 counterpart 存档的 Steam 云上传，使跨设备切换时原版档与模组档的互通结果能够再次跟随云端同步。
+- 禁用 BetterSaves 主动删除 Steam 云文件的行为，避免本地镜像清理把另一台设备仍然需要的云端存档一起删掉。
+- 重新平衡云存档策略：允许写云、禁止删云，在保留互通能力的同时降低跨设备同步被破坏的风险。
+
 ## 0.1.9 - 2026-04-10
 
 ### English
