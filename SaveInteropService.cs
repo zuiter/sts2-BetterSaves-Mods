@@ -1271,6 +1271,11 @@ internal static class SaveInteropService
 
         private SourceSide DeterminePreferredSource(string firstPath, string secondPath)
         {
+            if (TryDetermineSinglePlayerDataPreferredSource(firstPath, secondPath, out var guardedSource))
+            {
+                return guardedSource;
+            }
+
             var firstSnapshot = FileSnapshot.TryCreate(firstPath);
             var secondSnapshot = FileSnapshot.TryCreate(secondPath);
 
@@ -1311,6 +1316,59 @@ internal static class SaveInteropService
             return firstSnapshot.Value.Length >= secondSnapshot.Value.Length
                 ? SourceSide.First
                 : SourceSide.Second;
+        }
+
+        private bool TryDetermineSinglePlayerDataPreferredSource(
+            string firstPath,
+            string secondPath,
+            out SourceSide preferredSource)
+        {
+            preferredSource = SourceSide.None;
+
+            if (!TryGetProfileRelativePath(firstPath, out var firstRelativePath)
+                || !TryGetProfileRelativePath(secondPath, out var secondRelativePath))
+            {
+                return false;
+            }
+
+            var normalizedFirstRelativePath = NormalizeRelativePath(firstRelativePath);
+            if (!normalizedFirstRelativePath.Equals(
+                    NormalizeRelativePath(secondRelativePath),
+                    StringComparison.OrdinalIgnoreCase)
+                || !SinglePlayerDataGuardPaths.Contains(normalizedFirstRelativePath))
+            {
+                return false;
+            }
+
+            var firstProfileDir = TryGetProfileDirectory(firstPath);
+            var secondProfileDir = TryGetProfileDirectory(secondPath);
+            if (string.IsNullOrEmpty(firstProfileDir) || string.IsNullOrEmpty(secondProfileDir))
+            {
+                return false;
+            }
+
+            var firstState = GetSinglePlayerDataState(firstProfileDir);
+            var secondState = GetSinglePlayerDataState(secondProfileDir);
+
+            if (firstState.IsLowDataSinglePlayerProfile && secondState.IsClearlyRicherThan(firstState))
+            {
+                preferredSource = SourceSide.Second;
+                Log.Info(
+                    $"[BetterSaves] Preferred richer single-player source '{secondPath}' over low-data '{firstPath}' " +
+                    $"for '{normalizedFirstRelativePath}'. First={firstState}; Second={secondState}.");
+                return true;
+            }
+
+            if (secondState.IsLowDataSinglePlayerProfile && firstState.IsClearlyRicherThan(secondState))
+            {
+                preferredSource = SourceSide.First;
+                Log.Info(
+                    $"[BetterSaves] Preferred richer single-player source '{firstPath}' over low-data '{secondPath}' " +
+                    $"for '{normalizedFirstRelativePath}'. First={firstState}; Second={secondState}.");
+                return true;
+            }
+
+            return false;
         }
 
         private void CopyFileSafely(
@@ -1395,7 +1453,7 @@ internal static class SaveInteropService
             var targetState = GetSinglePlayerDataState(targetProfileDir);
 
             if (!sourceState.IsLowDataSinglePlayerProfile
-                || !targetState.IsMeaningfullyRicherThan(sourceState)
+                || !targetState.IsClearlyRicherThan(sourceState)
                 || !File.Exists(targetPath))
             {
                 return false;

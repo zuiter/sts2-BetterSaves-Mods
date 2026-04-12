@@ -1,4 +1,18 @@
 ﻿# Changelog
+## 0.2.1 - 2026-04-12
+
+### English
+
+- Moved the single-player overwrite protection earlier into source selection so BetterSaves now prefers the richer side before timestamp-based reconciliation can choose a low-data save.
+- Strengthened the low-data save guard for `progress.save` and `prefs.save` so first-time modded save creation is less likely to push a mostly empty profile back into an existing vanilla save.
+- Added diagnostics that log when BetterSaves explicitly prefers a richer single-player source over a low-data counterpart during reconciliation.
+
+### 中文
+
+- 将单人档保护前移到“选源阶段”，让 BetterSaves 在进入基于时间戳的对比前，就优先选择内容更完整的一侧作为同步源。
+- 进一步强化 `progress.save` 与 `prefs.save` 的低数据档保护，降低首次创建模组单人档时把近乎空白的档案反向覆盖已有原版档的概率。
+- 增加新的诊断日志：当 BetterSaves 在对账过程中明确选择“更成熟的单人档”而拒绝低数据 counterpart 时，会直接记录这一决策。
+
 ## 0.2.0 - 2026-04-10
 
 ### English
