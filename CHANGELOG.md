@@ -1,4 +1,18 @@
 ﻿# Changelog
+## 0.2.2 - 2026-04-14
+
+### English
+
+- Changed startup and delayed reconciliation to follow the current launch mode's preferred sync direction instead of always using automatic timestamp-based resolution.
+- This lets modded launches consistently treat the modded side as authoritative during bootstrap, so an older `modded-save` can still replace a newer vanilla save when that is the expected direction.
+- Prevented startup scans from silently re-promoting the vanilla side just because it was edited more recently before the next modded launch.
+
+### 中文
+
+- 调整启动扫描与延迟对账逻辑，使其跟随当前启动模式的同步方向，而不再一律使用基于时间戳的自动判定。
+- 这样在带其他模组启动时，BetterSaves 会更稳定地把模组档视为启动阶段的权威源；即便原版档后来被手动改得更新，也不会轻易把应由模组档覆盖回去的情况判断反了。
+- 避免在下一次模组启动前，仅因为原版档时间戳更新，就让启动阶段再次把原版侧悄悄提升为优先来源。
+
 ## 0.2.1 - 2026-04-12
 
 ### English

@@ -63,9 +63,7 @@ internal static class VanillaModeCompatibilityPatches
             : SaveInteropService.ReconcilePreference.ModdedToVanilla;
 
     public static SaveInteropService.ReconcilePreference StartupReconcilePreference =>
-        ShouldForceVanillaMode()
-            ? SaveInteropService.ReconcilePreference.Auto
-            : SaveInteropService.ReconcilePreference.Auto;
+        CurrentReconcilePreference;
 
     public static void Apply(Harmony harmony)
     {
