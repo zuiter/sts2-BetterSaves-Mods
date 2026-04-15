@@ -36,6 +36,16 @@
 - 在首次对账开始前，BetterSaves 会自动创建一份备份快照，方便你在必要时手动恢复这个槽位。
 - 在你确认首次同步方向前，BetterSaves 不会自动对该槽位受保护的单人关键文件执行同步覆盖。
 
+### 备份位置
+
+首次同步的自动备份会保存在：
+
+```text
+%AppData%/SlayTheSpire2/mods/BetterSaves/backups/first-sync-<时间戳>/
+```
+
+在这个目录下，BetterSaves 会保留首次对账前对应的 `profile.save`、`settings.save`、`profile1~3` 以及 `modded/profile1~3` 数据，方便你手动恢复。
+
 ## 安装位置
 
 将模组放到：

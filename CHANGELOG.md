@@ -8,6 +8,7 @@
 - Locked the confirmed first-sync direction to the current profile for a short reconciliation window so follow-up save hooks and delayed scans cannot immediately undo the player's choice.
 - Expanded pending first-sync protection beyond `progress.save` and `prefs.save` to also cover `current_run.save`, run history, and replay files before the player confirms a direction.
 - Added first-sync automatic backups before startup reconciliation so players have a recovery snapshot if a first-time import choice needs to be reversed manually.
+- Documented the backup location at `%AppData%/SlayTheSpire2/mods/BetterSaves/backups/first-sync-<timestamp>/` so players can find and restore their first-sync snapshots more easily.
 
 ### 中文
 
@@ -15,6 +16,7 @@
 - 玩家确认首次同步方向后，会在当前槽位上短时间锁定该方向，避免后续保存钩子或延迟扫描立刻把玩家的选择反向覆盖。
 - 将首次确认前的保护范围从 `progress.save` / `prefs.save` 扩展到 `current_run.save`、历史记录和 replay 文件，避免玩家确认前这些关键文件先按默认方向同步。
 - 在启动对账前加入首次同步自动备份，如果玩家需要手动回退首次导入选择，可以从备份快照恢复。
+- 在文档中补充首次同步备份目录 `%AppData%/SlayTheSpire2/mods/BetterSaves/backups/first-sync-<时间戳>/`，方便玩家自行查找和恢复备份存档。
 
 ## 0.2.2 - 2026-04-14
 

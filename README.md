@@ -36,6 +36,16 @@ English documentation. For Simplified Chinese, see [**简体中文**](README_ZH.
 - BetterSaves creates a backup snapshot before this first reconciliation so you can manually recover the slot if needed.
 - Until you confirm that first-sync choice, BetterSaves will avoid automatically reconciling the protected single-player files for that slot.
 
+### Backup Location
+
+First-sync backups are stored under:
+
+```text
+%AppData%/SlayTheSpire2/mods/BetterSaves/backups/first-sync-<timestamp>/
+```
+
+Inside that folder, BetterSaves keeps the corresponding `profile.save`, `settings.save`, `profile1~3`, and `modded/profile1~3` data that existed before the first reconciliation pass.
+
 ## Installation
 
 Place the mod in:
