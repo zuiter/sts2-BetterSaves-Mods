@@ -2,7 +2,7 @@
 
 中文文档。英文版请见 [**English**](README.md)。
 
-![Version](https://img.shields.io/badge/Version-0.2.1-blue.svg)
+![Version](https://img.shields.io/badge/Version-0.3.0-blue.svg)
 ![Game](https://img.shields.io/badge/Slay_The_Spire_2-Mod-red.svg)
 ![Platform](https://img.shields.io/badge/Platform-Windows%20|%20Linux-lightgrey.svg)
 
@@ -29,6 +29,12 @@
 - 只启用 `BetterSaves` 时，游戏会读取原版存档路径。
 - 启用其他玩法模组时，游戏会读取模组存档路径。
 - 切换模式前，最好先回到主菜单，或者退出前稍等片刻，让最后一次同步完成。
+
+## 首次同步
+
+- 当 BetterSaves 第一次接管一个已有存档槽位时，会先询问你这次应当以哪一侧为准：`以原版为准` 或 `以模组为准`。
+- 在首次对账开始前，BetterSaves 会自动创建一份备份快照，方便你在必要时手动恢复这个槽位。
+- 在你确认首次同步方向前，BetterSaves 不会自动对该槽位受保护的单人关键文件执行同步覆盖。
 
 ## 安装位置
 

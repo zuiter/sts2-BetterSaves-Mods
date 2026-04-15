@@ -1,7 +1,9 @@
 using System.Collections.Concurrent;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using HarmonyLib;
 using MegaCrit.Sts2.Core.Logging;
 
 namespace BetterSaves;
@@ -40,6 +42,13 @@ internal static class SaveInteropService
             "saves/prefs.save.backup"
         };
 
+    private static readonly HashSet<string> BootstrapPendingGuardExactPaths =
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            "saves/current_run.save",
+            "saves/current_run.save.backup"
+        };
+
     private static readonly string[] DataOnlyPrefixes =
     [
         "saves/history/",
@@ -59,9 +68,20 @@ internal static class SaveInteropService
         };
 
     private static readonly object InitLock = new();
+    private static readonly object BootstrapPromptLock = new();
+    private static readonly object BootstrapChoiceLock = new();
     private static readonly List<AccountSyncRoot> SyncRoots = [];
     private static readonly CancellationTokenSource ReconcileCancellation = new();
     private static readonly SemaphoreSlim ImmediateReconcileSemaphore = new(1, 1);
+    private static readonly TimeSpan BootstrapChoiceLockDuration = TimeSpan.FromSeconds(20);
+    private static BootstrapPromptRequest? _pendingBootstrapPrompt;
+    private static string? _bootstrapTargetAccountRoot;
+    private static string? _bootstrapChoiceAccountRoot;
+    private static int _bootstrapChoiceProfileIndex;
+    private static ReconcilePreference _bootstrapChoicePreference;
+    private static DateTime _bootstrapChoiceExpiresUtc;
+    private static bool _isExecutingBootstrapImport;
+    private static bool _skipBootstrapImportThisSession;
     private static bool _initialized;
 
     public static void Initialize()
@@ -89,7 +109,24 @@ internal static class SaveInteropService
                 return;
             }
 
-            foreach (var accountRoot in Directory.EnumerateDirectories(steamRoot))
+            var accountRoots = Directory.EnumerateDirectories(steamRoot).ToList();
+            _bootstrapTargetAccountRoot = SelectBootstrapTargetAccountRoot(accountRoots);
+            if (!string.IsNullOrEmpty(_bootstrapTargetAccountRoot))
+            {
+                Log.Info(
+                    $"[BetterSaves] First-sync bootstrap will target account root '{_bootstrapTargetAccountRoot}'.");
+            }
+
+            if (!FirstSyncBackupService.EnsureBackup(accountRoots))
+            {
+                BetterSavesConfig.SetBootstrapState(
+                    FirstSyncBootstrapState.Conflict,
+                    "failed to create first-sync backup before startup reconciliation");
+            }
+
+            foreach (var accountRoot in accountRoots
+                         .OrderByDescending(GetAccountRootLastActivityUtc)
+                         .ThenBy(path => path, StringComparer.OrdinalIgnoreCase))
             {
                 SyncRoots.Add(new AccountSyncRoot(accountRoot));
             }
@@ -102,6 +139,108 @@ internal static class SaveInteropService
         catch (Exception ex)
         {
             Log.Info($"[BetterSaves] Failed to initialize save interop: {ex}");
+        }
+    }
+
+    private static string? SelectBootstrapTargetAccountRoot(IEnumerable<string> accountRoots)
+    {
+        return accountRoots
+            .OrderByDescending(GetAccountRootLastActivityUtc)
+            .ThenBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault();
+    }
+
+    private static bool ShouldHandleBootstrapForAccountRoot(string accountRoot)
+    {
+        if (string.IsNullOrEmpty(_bootstrapTargetAccountRoot))
+        {
+            return true;
+        }
+
+        return string.Equals(
+            _bootstrapTargetAccountRoot,
+            accountRoot,
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static DateTime GetAccountRootLastActivityUtc(string accountRoot)
+    {
+        var candidatePaths = new List<string>
+        {
+            Path.Combine(accountRoot, "profile.save"),
+            Path.Combine(accountRoot, "settings.save")
+        };
+
+        for (var profileIndex = 1; profileIndex <= 3; profileIndex++)
+        {
+            candidatePaths.Add(Path.Combine(accountRoot, $"profile{profileIndex}", "saves", "progress.save"));
+            candidatePaths.Add(Path.Combine(accountRoot, $"profile{profileIndex}", "saves", "prefs.save"));
+            candidatePaths.Add(Path.Combine(accountRoot, $"profile{profileIndex}", "saves", "current_run.save"));
+            candidatePaths.Add(Path.Combine(accountRoot, "modded", $"profile{profileIndex}", "saves", "progress.save"));
+            candidatePaths.Add(Path.Combine(accountRoot, "modded", $"profile{profileIndex}", "saves", "prefs.save"));
+            candidatePaths.Add(Path.Combine(accountRoot, "modded", $"profile{profileIndex}", "saves", "current_run.save"));
+        }
+
+        return candidatePaths
+            .Select(path => File.Exists(path) ? File.GetLastWriteTimeUtc(path) : DateTime.MinValue)
+            .DefaultIfEmpty(DateTime.MinValue)
+            .Max();
+    }
+
+    private static void ActivateBootstrapChoiceLock(
+        string accountRoot,
+        int profileIndex,
+        ReconcilePreference preference,
+        string reason)
+    {
+        if (string.IsNullOrWhiteSpace(accountRoot)
+            || profileIndex is < 1 or > 3
+            || preference == ReconcilePreference.Auto)
+        {
+            return;
+        }
+
+        lock (BootstrapChoiceLock)
+        {
+            _bootstrapChoiceAccountRoot = accountRoot;
+            _bootstrapChoiceProfileIndex = profileIndex;
+            _bootstrapChoicePreference = preference;
+            _bootstrapChoiceExpiresUtc = DateTime.UtcNow.Add(BootstrapChoiceLockDuration);
+        }
+
+        Log.Info(
+            $"[BetterSaves] Locked first-sync choice '{preference}' for profile{profileIndex} under '{accountRoot}' " +
+            $"until {_bootstrapChoiceExpiresUtc:O} ({reason}).");
+    }
+
+    private static bool TryGetBootstrapChoiceLock(
+        string accountRoot,
+        int profileIndex,
+        out ReconcilePreference preference)
+    {
+        lock (BootstrapChoiceLock)
+        {
+            if (_bootstrapChoiceExpiresUtc <= DateTime.UtcNow
+                || string.IsNullOrWhiteSpace(_bootstrapChoiceAccountRoot))
+            {
+                _bootstrapChoiceAccountRoot = null;
+                _bootstrapChoiceProfileIndex = 0;
+                _bootstrapChoicePreference = ReconcilePreference.Auto;
+                _bootstrapChoiceExpiresUtc = default;
+                preference = ReconcilePreference.Auto;
+                return false;
+            }
+
+            if (!string.Equals(_bootstrapChoiceAccountRoot, accountRoot, StringComparison.OrdinalIgnoreCase)
+                || _bootstrapChoiceProfileIndex != profileIndex
+                || _bootstrapChoicePreference == ReconcilePreference.Auto)
+            {
+                preference = ReconcilePreference.Auto;
+                return false;
+            }
+
+            preference = _bootstrapChoicePreference;
+            return true;
         }
     }
 
@@ -245,6 +384,182 @@ internal static class SaveInteropService
         }
     }
 
+    public static bool TryGetPendingBootstrapPrompt(out BootstrapPromptRequest prompt)
+    {
+        lock (BootstrapPromptLock)
+        {
+            if (_pendingBootstrapPrompt is { } pending
+                && BetterSavesConfig.IsBootstrapPending)
+            {
+                prompt = pending;
+                return true;
+            }
+        }
+
+        prompt = default;
+        return false;
+    }
+
+    public static bool ConfirmPendingBootstrapPrompt(string source)
+    {
+        return ConfirmPendingBootstrapPrompt(source, null);
+    }
+
+    public static bool ConfirmPendingBootstrapPrompt(string source, BootstrapImportAction? overrideAction)
+    {
+        BootstrapPromptRequest request;
+        lock (BootstrapPromptLock)
+        {
+            if (_pendingBootstrapPrompt is not { } pending)
+            {
+                return false;
+            }
+
+            request = pending;
+        }
+
+        ImmediateReconcileSemaphore.Wait();
+        try
+        {
+            lock (InitLock)
+            {
+                var syncRoot = SyncRoots.FirstOrDefault(root =>
+                    string.Equals(root.AccountRoot, request.AccountRoot, StringComparison.OrdinalIgnoreCase));
+                if (syncRoot is null)
+                {
+                    return false;
+                }
+
+                var action = overrideAction ?? request.Action;
+                if (action == BootstrapImportAction.None)
+                {
+                    return false;
+                }
+
+                _isExecutingBootstrapImport = true;
+                try
+                {
+                    syncRoot.ExecuteBootstrapImport(request with { Action = action }, source);
+                }
+                finally
+                {
+                    _isExecutingBootstrapImport = false;
+                }
+
+                ActivateBootstrapChoiceLock(
+                    request.AccountRoot,
+                    request.ProfileIndex,
+                    action == BootstrapImportAction.VanillaToModded
+                        ? ReconcilePreference.VanillaToModded
+                        : ReconcilePreference.ModdedToVanilla,
+                    source);
+                TryReloadCurrentProfileFromDisk(source);
+                BetterSavesConfig.SetBootstrapState(
+                    FirstSyncBootstrapState.Resolved,
+                    $"user confirmed bootstrap import '{action}' ({source})");
+                _skipBootstrapImportThisSession = false;
+                lock (BootstrapPromptLock)
+                {
+                    _pendingBootstrapPrompt = null;
+                }
+
+                return true;
+            }
+        }
+        finally
+        {
+            ImmediateReconcileSemaphore.Release();
+        }
+    }
+
+    public static bool DeclinePendingBootstrapPrompt(string source)
+    {
+        lock (BootstrapPromptLock)
+        {
+            if (_pendingBootstrapPrompt is null)
+            {
+                return false;
+            }
+
+            _pendingBootstrapPrompt = null;
+        }
+
+        _skipBootstrapImportThisSession = true;
+        BetterSavesConfig.SetBootstrapState(
+            FirstSyncBootstrapState.Resolved,
+            $"user skipped bootstrap import ({source})");
+        return true;
+    }
+
+    public static void DismissPendingBootstrapPrompt(string source)
+    {
+        if (DeclinePendingBootstrapPrompt(source))
+        {
+            Log.Info($"[BetterSaves] Dismissed first-sync bootstrap prompt without import ({source}).");
+        }
+    }
+
+    private static void TryReloadCurrentProfileFromDisk(string reason)
+    {
+        try
+        {
+            var saveManagerType = AccessTools.TypeByName("MegaCrit.Sts2.Core.Saves.SaveManager");
+            if (saveManagerType is null)
+            {
+                Log.Info("[BetterSaves] Could not resolve SaveManager type for post-import reload.");
+                return;
+            }
+
+            var instanceProperty = AccessTools.Property(saveManagerType, "Instance");
+            var saveManager = instanceProperty?.GetValue(null);
+            if (saveManager is null)
+            {
+                Log.Info("[BetterSaves] Could not resolve SaveManager.Instance for post-import reload.");
+                return;
+            }
+
+            var currentProfileProperty = AccessTools.Property(saveManagerType, "CurrentProfileId");
+            if (currentProfileProperty?.GetValue(saveManager) is not int currentProfileId || currentProfileId <= 0)
+            {
+                Log.Info("[BetterSaves] Could not resolve current profile id for post-import reload.");
+                return;
+            }
+
+            var initProfileMethod = AccessTools.Method(saveManagerType, "InitProfileId", [typeof(int?)]);
+            if (initProfileMethod is not null)
+            {
+                initProfileMethod.Invoke(saveManager, [new int?(currentProfileId)]);
+                Log.Info(
+                    $"[BetterSaves] Reloaded current profile {currentProfileId} from disk after bootstrap import ({reason}) using InitProfileId.");
+            }
+
+            var switchProfileMethod = AccessTools.Method(saveManagerType, "SwitchProfileId", [typeof(int)]);
+            if (switchProfileMethod is not null)
+            {
+                switchProfileMethod.Invoke(saveManager, [currentProfileId]);
+                Log.Info(
+                    $"[BetterSaves] Reloaded current profile {currentProfileId} from disk after bootstrap import ({reason}) using SwitchProfileId.");
+            }
+
+            var initPrefsMethod = AccessTools.Method(saveManagerType, "InitPrefsData", Type.EmptyTypes);
+            initPrefsMethod?.Invoke(saveManager, []);
+
+            var initProgressMethod = AccessTools.Method(saveManagerType, "InitProgressData", Type.EmptyTypes);
+            initProgressMethod?.Invoke(saveManager, []);
+
+            var initSettingsMethod = AccessTools.Method(saveManagerType, "InitSettingsData", Type.EmptyTypes);
+            initSettingsMethod?.Invoke(saveManager, []);
+
+            Log.Info(
+                $"[BetterSaves] Refreshed current profile {currentProfileId} from disk after bootstrap import ({reason}) " +
+                $"by reinitializing profile, prefs, progress, and settings data.");
+        }
+        catch (Exception ex)
+        {
+            Log.Info($"[BetterSaves] Failed to reload current profile from disk after bootstrap import ({reason}): {ex}");
+        }
+    }
+
     private static void ReconcileAllProfilesUnsafe(string reason, ReconcilePreference preference)
     {
         lock (InitLock)
@@ -324,6 +639,8 @@ internal static class SaveInteropService
 
             Log.Info($"[BetterSaves] Watching '{_accountRoot}'.");
         }
+
+        public string AccountRoot => _accountRoot;
 
         public void Dispose()
         {
@@ -497,6 +814,13 @@ internal static class SaveInteropService
             var moddedProfileDir = Path.Combine(_accountRoot, "modded", $"profile{profileIndex}");
             var activeProfileIndex = TryGetActiveProfileIndex();
 
+            if (TryGetBootstrapChoiceLock(_accountRoot, profileIndex, out var lockedPreference))
+            {
+                preference = lockedPreference;
+                Log.Info(
+                    $"[BetterSaves] Applying locked first-sync choice '{preference}' to profile{profileIndex} ({reason}).");
+            }
+
             if (!Directory.Exists(vanillaProfileDir) && !Directory.Exists(moddedProfileDir))
             {
                 return;
@@ -504,6 +828,7 @@ internal static class SaveInteropService
 
             if (TryHandleFreshInstallBootstrapProfilePair(
                     profileIndex,
+                    activeProfileIndex,
                     vanillaProfileDir,
                     moddedProfileDir,
                     reason))
@@ -558,68 +883,156 @@ internal static class SaveInteropService
 
         private bool TryHandleFreshInstallBootstrapProfilePair(
             int profileIndex,
+            int? activeProfileIndex,
             string vanillaProfileDir,
             string moddedProfileDir,
             string reason)
         {
-            if (!BetterSavesConfig.IsFreshInstallSession || !IsBootstrapReason(reason))
+            if (!IsBootstrapReason(reason))
             {
                 return false;
+            }
+
+            if (_skipBootstrapImportThisSession)
+            {
+                return true;
+            }
+
+            if (BetterSavesConfig.IsBootstrapPending
+                && !ShouldHandleBootstrapForAccountRoot(_accountRoot))
+            {
+                if (activeProfileIndex is null || profileIndex == activeProfileIndex.Value)
+                {
+                    Log.Info(
+                        $"[BetterSaves] Skipping first-sync bootstrap handling for non-target account root '{_accountRoot}' " +
+                        $"while '{_bootstrapTargetAccountRoot}' remains the active bootstrap root ({reason}).");
+                }
+
+                return true;
+            }
+
+            if (activeProfileIndex is not null && profileIndex != activeProfileIndex.Value)
+            {
+                if (BetterSavesConfig.BootstrapState != FirstSyncBootstrapState.Resolved)
+                {
+                    Log.Info(
+                        $"[BetterSaves] Deferring first-sync bootstrap handling for non-active profile{profileIndex} " +
+                        $"while profile{activeProfileIndex.Value} remains the active slot ({reason}).");
+                    return true;
+                }
+
+                return false;
+            }
+
+            if (BetterSavesConfig.IsBootstrapPending
+                && TryGetPendingBootstrapPrompt(out var pendingPrompt)
+                && string.Equals(pendingPrompt.AccountRoot, _accountRoot, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
             }
 
             var vanillaState = GetSinglePlayerDataState(vanillaProfileDir);
             var moddedState = GetSinglePlayerDataState(moddedProfileDir);
 
-            if (!vanillaState.HasAnySinglePlayerData && !moddedState.HasAnySinglePlayerData)
+            var decision = EvaluateBootstrapDecision(profileIndex, vanillaState, moddedState, reason);
+            if (!decision.ShouldHandle)
             {
                 return false;
             }
 
-            if (vanillaState.IsEstablishedSinglePlayerProfile && !moddedState.IsEstablishedSinglePlayerProfile)
+            if (decision.LogMessage is not null)
             {
-                Log.Info(
-                    $"[BetterSaves] Fresh-install bootstrap copied vanilla profile{profileIndex} into modded because " +
-                    $"the modded side looked immature. Vanilla={vanillaState}; Modded={moddedState} ({reason}).");
-                CopyTreeOneWay(vanillaProfileDir, moddedProfileDir, $"fresh-install bootstrap: {reason}");
-                return true;
+                Log.Info(decision.LogMessage);
             }
 
-            if (!vanillaState.HasAnySinglePlayerData && moddedState.IsEstablishedSinglePlayerProfile)
+            if (decision.PromptKind is { } promptKind && decision.Action is { } action)
             {
-                Log.Info(
-                    $"[BetterSaves] Fresh-install bootstrap copied modded profile{profileIndex} into vanilla because " +
-                    $"the vanilla side had no meaningful single-player data. Vanilla={vanillaState}; Modded={moddedState} ({reason}).");
-                CopyTreeOneWay(moddedProfileDir, vanillaProfileDir, $"fresh-install bootstrap: {reason}");
-                return true;
+                QueueBootstrapPrompt(
+                    profileIndex,
+                    promptKind,
+                    action,
+                    vanillaState,
+                    moddedState,
+                    reason);
             }
 
-            if (vanillaState.IsClearlyRicherThan(moddedState))
+            return true;
+        }
+
+        private BootstrapDecision EvaluateBootstrapDecision(
+            int profileIndex,
+            SinglePlayerDataState vanillaState,
+            SinglePlayerDataState moddedState,
+            string reason)
+        {
+            if (BetterSavesConfig.BootstrapState == FirstSyncBootstrapState.Resolved)
             {
-                Log.Info(
-                    $"[BetterSaves] Fresh-install bootstrap preferred vanilla profile{profileIndex} over modded. " +
-                    $"Vanilla={vanillaState}; Modded={moddedState} ({reason}).");
-                CopyTreeOneWay(vanillaProfileDir, moddedProfileDir, $"fresh-install bootstrap: {reason}");
-                return true;
+                return BootstrapDecision.None();
             }
 
-            if (moddedState.IsClearlyRicherThan(vanillaState))
+            if (BetterSavesConfig.IsBootstrapConflict)
             {
-                Log.Info(
-                    $"[BetterSaves] Fresh-install bootstrap detected existing richer modded profile{profileIndex} and " +
-                    $"skipped automatic overwrite to preserve vanilla. Vanilla={vanillaState}; Modded={moddedState} ({reason}).");
-                return true;
+                return BootstrapDecision.Block();
             }
 
-            if (vanillaState.HasAnySinglePlayerData && moddedState.HasAnySinglePlayerData)
+            return BootstrapDecision.Prompt(
+                BootstrapPromptKind.ChooseAuthoritativeSide,
+                BootstrapImportAction.None,
+                $"[BetterSaves] First-sync bootstrap is waiting for explicit user choice on profile{profileIndex}. " +
+                $"Vanilla={vanillaState}; Modded={moddedState} ({reason}).");
+        }
+
+        private void QueueBootstrapPrompt(
+            int profileIndex,
+            BootstrapPromptKind kind,
+            BootstrapImportAction action,
+            SinglePlayerDataState vanillaState,
+            SinglePlayerDataState moddedState,
+            string reason)
+        {
+            var queued = false;
+            lock (BootstrapPromptLock)
             {
-                Log.Info(
-                    $"[BetterSaves] Fresh-install bootstrap found existing data on both sides for profile{profileIndex} and " +
-                    $"skipped automatic overwrite because neither side was clearly authoritative. " +
-                    $"Vanilla={vanillaState}; Modded={moddedState} ({reason}).");
-                return true;
+                if (_pendingBootstrapPrompt is null)
+                {
+                    _pendingBootstrapPrompt = new BootstrapPromptRequest(
+                        _accountRoot,
+                        profileIndex,
+                        kind,
+                        action,
+                        reason);
+                    queued = true;
+                }
             }
 
-            return false;
+            if (queued)
+            {
+                Log.Info(
+                    $"[BetterSaves] Queued first-sync bootstrap confirmation for profile{profileIndex} " +
+                    $"with prompt '{kind}' and action '{action}'. Vanilla={vanillaState}; Modded={moddedState} ({reason}).");
+            }
+            else
+            {
+                Log.Info(
+                    $"[BetterSaves] Ignored an additional first-sync bootstrap prompt for profile{profileIndex} under '{_accountRoot}' " +
+                    $"because another bootstrap prompt is already pending. Vanilla={vanillaState}; Modded={moddedState} ({reason}).");
+            }
+        }
+
+        public void ExecuteBootstrapImport(BootstrapPromptRequest request, string source)
+        {
+            var vanillaProfileDir = Path.Combine(_accountRoot, $"profile{request.ProfileIndex}");
+            var moddedProfileDir = Path.Combine(_accountRoot, "modded", $"profile{request.ProfileIndex}");
+
+            switch (request.Action)
+            {
+                case BootstrapImportAction.VanillaToModded:
+                    CopyTreeOneWay(vanillaProfileDir, moddedProfileDir, $"confirmed bootstrap import ({source})");
+                    break;
+                case BootstrapImportAction.ModdedToVanilla:
+                    CopyTreeOneWay(moddedProfileDir, vanillaProfileDir, $"confirmed bootstrap import ({source})");
+                    break;
+            }
         }
 
         private static bool IsBootstrapReason(string reason)
@@ -946,9 +1359,12 @@ internal static class SaveInteropService
                 return;
             }
 
-            var preference = VanillaModeCompatibilityPatches.CurrentReconcilePreference;
+            var preference = GetEffectiveReconcilePreferenceForPath(
+                eventArgs.FullPath,
+                VanillaModeCompatibilityPatches.CurrentReconcilePreference);
             if (!ShouldProcessPathForPreference(eventArgs.FullPath, preference))
             {
+                VanillaModeCompatibilityPatches.TryFinalizeSessionReconcilePreferenceOverrideForSourcePath(eventArgs.FullPath);
                 return;
             }
 
@@ -983,9 +1399,12 @@ internal static class SaveInteropService
                 return;
             }
 
-            var preference = VanillaModeCompatibilityPatches.CurrentReconcilePreference;
+            var preference = GetEffectiveReconcilePreferenceForPath(
+                eventArgs.FullPath,
+                VanillaModeCompatibilityPatches.CurrentReconcilePreference);
             if (!ShouldProcessPathForPreference(eventArgs.FullPath, preference))
             {
+                VanillaModeCompatibilityPatches.TryFinalizeSessionReconcilePreferenceOverrideForSourcePath(eventArgs.FullPath);
                 return;
             }
 
@@ -1035,9 +1454,12 @@ internal static class SaveInteropService
                 return;
             }
 
-            var preference = VanillaModeCompatibilityPatches.CurrentReconcilePreference;
+            var preference = GetEffectiveReconcilePreferenceForPath(
+                eventArgs.FullPath,
+                VanillaModeCompatibilityPatches.CurrentReconcilePreference);
             if (!ShouldProcessPathForPreference(eventArgs.FullPath, preference))
             {
+                VanillaModeCompatibilityPatches.TryFinalizeSessionReconcilePreferenceOverrideForSourcePath(eventArgs.FullPath);
                 return;
             }
 
@@ -1053,6 +1475,21 @@ internal static class SaveInteropService
             }
 
             OnFileChanged(sender, eventArgs);
+        }
+
+        private ReconcilePreference GetEffectiveReconcilePreferenceForPath(
+            string sourcePath,
+            ReconcilePreference fallbackPreference)
+        {
+            if (!TryGetProfileIndexAndModeFromPath(sourcePath, out var profileIndex, out _)
+                || !TryGetBootstrapChoiceLock(_accountRoot, profileIndex, out var lockedPreference))
+            {
+                return fallbackPreference;
+            }
+
+            Log.Info(
+                $"[BetterSaves] Applying locked first-sync choice '{lockedPreference}' to path '{sourcePath}'.");
+            return lockedPreference;
         }
 
         private void OnWatcherError(object sender, ErrorEventArgs eventArgs)
@@ -1109,6 +1546,19 @@ internal static class SaveInteropService
             return DataOnlyExactPaths.Contains(normalizedProfileRelativePath)
                 || DataOnlyPrefixes.Any(prefix =>
                     normalizedProfileRelativePath.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
+        }
+
+        private static bool IsBootstrapPendingProtectedProfileRelativePath(string normalizedProfileRelativePath)
+        {
+            if (IsEphemeralProfileRelativePath(normalizedProfileRelativePath))
+            {
+                return false;
+            }
+
+            return SinglePlayerDataGuardPaths.Contains(normalizedProfileRelativePath)
+                || BootstrapPendingGuardExactPaths.Contains(normalizedProfileRelativePath)
+                || normalizedProfileRelativePath.StartsWith("saves/history/", StringComparison.OrdinalIgnoreCase)
+                || normalizedProfileRelativePath.StartsWith("replays/", StringComparison.OrdinalIgnoreCase);
         }
 
         private static bool IsEphemeralProfileRelativePath(string normalizedProfileRelativePath)
@@ -1271,6 +1721,11 @@ internal static class SaveInteropService
 
         private SourceSide DeterminePreferredSource(string firstPath, string secondPath)
         {
+            if (TryDetermineBootstrapProtectedPreferredSource(firstPath, secondPath, out var protectedSource))
+            {
+                return protectedSource;
+            }
+
             if (TryDetermineSinglePlayerDataPreferredSource(firstPath, secondPath, out var guardedSource))
             {
                 return guardedSource;
@@ -1318,6 +1773,40 @@ internal static class SaveInteropService
                 : SourceSide.Second;
         }
 
+        private bool TryDetermineBootstrapProtectedPreferredSource(
+            string firstPath,
+            string secondPath,
+            out SourceSide preferredSource)
+        {
+            preferredSource = SourceSide.None;
+
+            if (_isExecutingBootstrapImport
+                || (!BetterSavesConfig.IsBootstrapPending && !BetterSavesConfig.IsBootstrapConflict))
+            {
+                return false;
+            }
+
+            if (!TryGetProfileRelativePath(firstPath, out var firstRelativePath)
+                || !TryGetProfileRelativePath(secondPath, out var secondRelativePath))
+            {
+                return false;
+            }
+
+            var normalizedFirstRelativePath = NormalizeRelativePath(firstRelativePath);
+            if (!normalizedFirstRelativePath.Equals(
+                    NormalizeRelativePath(secondRelativePath),
+                    StringComparison.OrdinalIgnoreCase)
+                || !IsBootstrapPendingProtectedProfileRelativePath(normalizedFirstRelativePath))
+            {
+                return false;
+            }
+
+            Log.Info(
+                $"[BetterSaves] First-sync bootstrap is not resolved for '{normalizedFirstRelativePath}'. " +
+                $"Skipping automatic overwrite between '{firstPath}' and '{secondPath}'.");
+            return true;
+        }
+
         private bool TryDetermineSinglePlayerDataPreferredSource(
             string firstPath,
             string secondPath,
@@ -1353,6 +1842,12 @@ internal static class SaveInteropService
             if (firstState.IsLowDataSinglePlayerProfile && secondState.IsClearlyRicherThan(firstState))
             {
                 preferredSource = SourceSide.Second;
+                if (BetterSavesConfig.IsBootstrapConflict)
+                {
+                    BetterSavesConfig.SetBootstrapState(
+                        FirstSyncBootstrapState.Resolved,
+                        $"bootstrap conflict resolved by preferring richer single-player source for '{normalizedFirstRelativePath}'");
+                }
                 Log.Info(
                     $"[BetterSaves] Preferred richer single-player source '{secondPath}' over low-data '{firstPath}' " +
                     $"for '{normalizedFirstRelativePath}'. First={firstState}; Second={secondState}.");
@@ -1362,9 +1857,38 @@ internal static class SaveInteropService
             if (secondState.IsLowDataSinglePlayerProfile && firstState.IsClearlyRicherThan(secondState))
             {
                 preferredSource = SourceSide.First;
+                if (BetterSavesConfig.IsBootstrapConflict)
+                {
+                    BetterSavesConfig.SetBootstrapState(
+                        FirstSyncBootstrapState.Resolved,
+                        $"bootstrap conflict resolved by preferring richer single-player source for '{normalizedFirstRelativePath}'");
+                }
                 Log.Info(
                     $"[BetterSaves] Preferred richer single-player source '{firstPath}' over low-data '{secondPath}' " +
                     $"for '{normalizedFirstRelativePath}'. First={firstState}; Second={secondState}.");
+                return true;
+            }
+
+            if (!_isExecutingBootstrapImport && BetterSavesConfig.IsBootstrapPending)
+            {
+                preferredSource = SourceSide.None;
+                Log.Info(
+                    $"[BetterSaves] First-sync bootstrap is still pending confirmation for '{normalizedFirstRelativePath}'. " +
+                    $"Skipping automatic overwrite between '{firstPath}' and '{secondPath}'. " +
+                    $"First={firstState}; Second={secondState}.");
+                return true;
+            }
+
+            if (!_isExecutingBootstrapImport
+                && BetterSavesConfig.IsBootstrapConflict
+                && firstState.HasAnySinglePlayerData
+                && secondState.HasAnySinglePlayerData)
+            {
+                preferredSource = SourceSide.None;
+                Log.Info(
+                    $"[BetterSaves] Bootstrap conflict is still unresolved for '{normalizedFirstRelativePath}'. " +
+                    $"Skipping automatic overwrite between '{firstPath}' and '{secondPath}'. " +
+                    $"First={firstState}; Second={secondState}.");
                 return true;
             }
 
@@ -1379,6 +1903,11 @@ internal static class SaveInteropService
         {
             try
             {
+                if (TryProtectPendingBootstrapFile(sourcePath, targetPath, reason))
+                {
+                    return;
+                }
+
                 if (TryPurgeStaleCurrentRunPair(sourcePath, targetPath, reason))
                 {
                     return;
@@ -1425,6 +1954,35 @@ internal static class SaveInteropService
             }
         }
 
+        private bool TryProtectPendingBootstrapFile(string sourcePath, string targetPath, string reason)
+        {
+            if (_isExecutingBootstrapImport
+                || (!BetterSavesConfig.IsBootstrapPending && !BetterSavesConfig.IsBootstrapConflict))
+            {
+                return false;
+            }
+
+            if (!TryGetProfileRelativePath(sourcePath, out var sourceRelativePath)
+                || !TryGetProfileRelativePath(targetPath, out var targetRelativePath))
+            {
+                return false;
+            }
+
+            var normalizedSourceRelativePath = NormalizeRelativePath(sourceRelativePath);
+            if (!normalizedSourceRelativePath.Equals(
+                    NormalizeRelativePath(targetRelativePath),
+                    StringComparison.OrdinalIgnoreCase)
+                || !IsBootstrapPendingProtectedProfileRelativePath(normalizedSourceRelativePath))
+            {
+                return false;
+            }
+
+            Log.Info(
+                $"[BetterSaves] First-sync bootstrap is not resolved for '{normalizedSourceRelativePath}'. " +
+                $"Skipping automatic overwrite between '{sourcePath}' and '{targetPath}' ({reason}).");
+            return true;
+        }
+
         private bool TryProtectLowDataSinglePlayerData(string sourcePath, string targetPath, string reason)
         {
             if (!TryGetProfileRelativePath(sourcePath, out var sourceRelativePath)
@@ -1451,6 +2009,24 @@ internal static class SaveInteropService
 
             var sourceState = GetSinglePlayerDataState(sourceProfileDir);
             var targetState = GetSinglePlayerDataState(targetProfileDir);
+
+            if (!_isExecutingBootstrapImport && BetterSavesConfig.IsBootstrapPending)
+            {
+                Log.Info(
+                    $"[BetterSaves] First-sync bootstrap is still pending confirmation for '{normalizedSourceRelativePath}'. " +
+                    $"Skipping automatic overwrite between '{sourcePath}' and '{targetPath}'. " +
+                    $"Source={sourceState}; Target={targetState} ({reason}).");
+                return true;
+            }
+
+            if (!_isExecutingBootstrapImport && BetterSavesConfig.IsBootstrapConflict)
+            {
+                Log.Info(
+                    $"[BetterSaves] First-sync bootstrap is in conflict state for '{normalizedSourceRelativePath}'. " +
+                    $"Skipping automatic overwrite between '{sourcePath}' and '{targetPath}'. " +
+                    $"Source={sourceState}; Target={targetState} ({reason}).");
+                return true;
+            }
 
             if (!sourceState.IsLowDataSinglePlayerProfile
                 || !targetState.IsClearlyRicherThan(sourceState)
@@ -2500,6 +3076,51 @@ internal static class SaveInteropService
         }
     }
 
+    internal enum BootstrapImportAction
+    {
+        None = 0,
+        VanillaToModded = 1,
+        ModdedToVanilla = 2
+    }
+
+    internal enum BootstrapPromptKind
+    {
+        ConfirmSingleImport = 0,
+        ChooseAuthoritativeSide = 1
+    }
+
+    internal readonly record struct BootstrapPromptRequest(
+        string AccountRoot,
+        int ProfileIndex,
+        BootstrapPromptKind Kind,
+        BootstrapImportAction Action,
+        string Reason);
+
+    private readonly record struct BootstrapDecision(
+        bool ShouldHandle,
+        BootstrapPromptKind? PromptKind,
+        BootstrapImportAction? Action,
+        string? LogMessage)
+    {
+        public static BootstrapDecision None()
+        {
+            return new BootstrapDecision(false, null, null, null);
+        }
+
+        public static BootstrapDecision Block()
+        {
+            return new BootstrapDecision(true, null, null, null);
+        }
+
+        public static BootstrapDecision Prompt(
+            BootstrapPromptKind promptKind,
+            BootstrapImportAction action,
+            string logMessage)
+        {
+            return new BootstrapDecision(true, promptKind, action, logMessage);
+        }
+    }
+
     private enum SourceSide
     {
         None,
@@ -2547,14 +3168,14 @@ internal static class SaveInteropService
             !HasSinglePlayerCurrentRun
             && HistoryEntryCount <= 4
             && ProgressLength <= 16 * 1024
-            && ProgressCollectionScore <= 32
+            && ProgressCollectionScore <= 96
             && PrefsLength <= 1024;
 
         public bool IsEstablishedSinglePlayerProfile =>
             HasSinglePlayerCurrentRun
             || HistoryEntryCount >= 12
             || ProgressLength >= 24 * 1024
-            || ProgressCollectionScore >= 48;
+            || (ProgressLength >= 12 * 1024 && ProgressCollectionScore >= 96);
 
         public bool IsMeaningfullyRicherThan(SinglePlayerDataState other)
         {

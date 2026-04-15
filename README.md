@@ -2,7 +2,7 @@
 
 English documentation. For Simplified Chinese, see [**简体中文**](README_ZH.md).
 
-![Version](https://img.shields.io/badge/Version-0.2.1-blue.svg)
+![Version](https://img.shields.io/badge/Version-0.3.0-blue.svg)
 ![Game](https://img.shields.io/badge/Slay_The_Spire_2-Mod-red.svg)
 ![Platform](https://img.shields.io/badge/Platform-Windows%20|%20Linux-lightgrey.svg)
 
@@ -29,6 +29,12 @@ English documentation. For Simplified Chinese, see [**简体中文**](README_ZH.
 - When only `BetterSaves` is enabled, the game loads the vanilla save path.
 - When other gameplay mods are enabled, the game loads the modded save path.
 - Switching modes is safest after returning to the main menu or waiting a moment before quitting.
+
+## First Sync
+
+- The first time BetterSaves manages an existing profile, it asks which side should be authoritative for that slot: `Use Vanilla` or `Use Modded`.
+- BetterSaves creates a backup snapshot before this first reconciliation so you can manually recover the slot if needed.
+- Until you confirm that first-sync choice, BetterSaves will avoid automatically reconciling the protected single-player files for that slot.
 
 ## Installation
 

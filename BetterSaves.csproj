@@ -10,6 +10,9 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Remove=".godot\mono\temp\obj\**\*.cs" />
+    <Compile Remove="tools\**\*.cs" />
+
     <Reference Include="sts2">
       <HintPath>$(Sts2DataDir)\sts2.dll</HintPath>
       <Private>false</Private>

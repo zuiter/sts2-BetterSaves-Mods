@@ -10,9 +10,19 @@ internal enum SyncMode
     DataOnly = 2
 }
 
+internal enum FirstSyncBootstrapState
+{
+    Resolved = 0,
+    Pending = 1,
+    Conflict = 2
+}
+
 internal sealed class BetterSavesConfigData
 {
     public SyncMode SyncMode { get; set; } = SyncMode.FullSync;
+    public FirstSyncBootstrapState BootstrapState { get; set; } = FirstSyncBootstrapState.Resolved;
+    public bool BootstrapBackupCreated { get; set; }
+    public string? BootstrapBackupPath { get; set; }
     public int LastVanillaProfileId { get; set; }
     public int LastModdedProfileId { get; set; }
     public Dictionary<string, ulong> ModdedMultiplayerLocalPlayerIds { get; set; } = new();
@@ -27,7 +37,6 @@ internal static class BetterSavesConfig
     };
 
     private static BetterSavesConfigData? _cached;
-    private static bool _createdThisSession;
 
     public static SyncMode CurrentMode
     {
@@ -46,7 +55,44 @@ internal static class BetterSavesConfig
     public static bool IsDataSyncEnabled => CurrentMode is SyncMode.DataOnly or SyncMode.FullSync;
     public static bool IsSettingsSyncEnabled => CurrentMode == SyncMode.FullSync;
     public static bool UsesSharedProfileSelection => CurrentMode != SyncMode.DataOnly;
-    public static bool IsFreshInstallSession => _createdThisSession;
+    public static bool IsBootstrapPending => BootstrapState == FirstSyncBootstrapState.Pending;
+    public static bool IsBootstrapBackupCreated
+    {
+        get
+        {
+            lock (ConfigLock)
+            {
+                _cached ??= LoadUnsafe();
+                return _cached.BootstrapBackupCreated;
+            }
+        }
+    }
+
+    public static string? BootstrapBackupPath
+    {
+        get
+        {
+            lock (ConfigLock)
+            {
+                _cached ??= LoadUnsafe();
+                return _cached.BootstrapBackupPath;
+            }
+        }
+    }
+
+    public static FirstSyncBootstrapState BootstrapState
+    {
+        get
+        {
+            lock (ConfigLock)
+            {
+                _cached ??= LoadUnsafe();
+                return _cached.BootstrapState;
+            }
+        }
+    }
+
+    public static bool IsBootstrapConflict => BootstrapState == FirstSyncBootstrapState.Conflict;
 
     public static int GetPreferredProfileId(bool vanillaMode)
     {
@@ -76,6 +122,42 @@ internal static class BetterSavesConfig
         SaveInteropService.ReconcileNow(
             $"config change: {mode}",
             VanillaModeCompatibilityPatches.StartupReconcilePreference);
+    }
+
+    public static void SetBootstrapState(FirstSyncBootstrapState state, string reason)
+    {
+        lock (ConfigLock)
+        {
+            _cached ??= LoadUnsafe();
+            if (_cached.BootstrapState == state)
+            {
+                return;
+            }
+
+            _cached.BootstrapState = state;
+            SaveUnsafe(_cached);
+        }
+
+        Log.Info($"[BetterSaves] Updated first-sync bootstrap state to '{state}' ({reason}).");
+    }
+
+    public static void MarkBootstrapBackupCreated(string backupPath)
+    {
+        lock (ConfigLock)
+        {
+            _cached ??= LoadUnsafe();
+            if (_cached.BootstrapBackupCreated
+                && string.Equals(_cached.BootstrapBackupPath, backupPath, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            _cached.BootstrapBackupCreated = true;
+            _cached.BootstrapBackupPath = backupPath;
+            SaveUnsafe(_cached);
+        }
+
+        Log.Info($"[BetterSaves] Recorded first-sync backup at '{backupPath}'.");
     }
 
     public static void SetPreferredProfileId(bool vanillaMode, int profileId)
@@ -156,8 +238,10 @@ internal static class BetterSavesConfig
             var configPath = GetConfigPath();
             if (!File.Exists(configPath))
             {
-                _createdThisSession = true;
-                var defaults = new BetterSavesConfigData();
+                var defaults = new BetterSavesConfigData
+                {
+                    BootstrapState = FirstSyncBootstrapState.Pending
+                };
                 SaveUnsafe(defaults);
                 return defaults;
             }
@@ -166,6 +250,10 @@ internal static class BetterSavesConfig
             var config = JsonSerializer.Deserialize<BetterSavesConfigData>(json, JsonOptions)
                 ?? new BetterSavesConfigData();
             config.ModdedMultiplayerLocalPlayerIds ??= new Dictionary<string, ulong>();
+            if (config.BootstrapState == FirstSyncBootstrapState.Conflict)
+            {
+                config.BootstrapState = FirstSyncBootstrapState.Resolved;
+            }
             return config;
         }
         catch (Exception ex)

@@ -15,6 +15,7 @@ internal static class VanillaModeCompatibilityPatches
     private const string SettingsScreenTypeName = "MegaCrit.Sts2.Core.Nodes.Screens.Settings.NSettingsScreen";
     private const string PaginatorTypeName = "MegaCrit.Sts2.Core.Nodes.Screens.Settings.NPaginator";
     private const string ProfileButtonTypeName = "MegaCrit.Sts2.Core.Nodes.Screens.ProfileScreen.NProfileButton";
+    private const string MainMenuTypeName = "MegaCrit.Sts2.Core.Nodes.Screens.MainMenu.NMainMenu";
     private const string TreasureHandImageCollectionTypeName = "MegaCrit.Sts2.Core.Nodes.Screens.TreasureRoomRelic.NHandImageCollection";
     private const string DebugInfoLabelManagerTypeName = "MegaCrit.Sts2.Core.Nodes.Debug.NDebugInfoLabelManager";
     private const string DevConsoleTypeName = "MegaCrit.Sts2.Core.Nodes.Debug.NDevConsole";
@@ -38,6 +39,9 @@ internal static class VanillaModeCompatibilityPatches
     private static readonly object StateLock = new();
 
     private static bool? _compatibilityMode;
+    private static SaveInteropService.ReconcilePreference? _sessionPreferenceOverride;
+    private static bool _clearSessionPreferenceOverrideOnNextMainMenuReady;
+    private static bool _clearSessionPreferenceOverrideOnFirstTargetSideWrite;
     private static bool _applied;
     private static bool _loggedDetection;
     private static bool _loggedForcedModdedFalse;
@@ -58,9 +62,10 @@ internal static class VanillaModeCompatibilityPatches
     }
 
     public static SaveInteropService.ReconcilePreference CurrentReconcilePreference =>
-        ShouldForceVanillaMode()
+        _sessionPreferenceOverride
+        ?? (ShouldForceVanillaMode()
             ? SaveInteropService.ReconcilePreference.Auto
-            : SaveInteropService.ReconcilePreference.ModdedToVanilla;
+            : SaveInteropService.ReconcilePreference.ModdedToVanilla);
 
     public static SaveInteropService.ReconcilePreference StartupReconcilePreference =>
         CurrentReconcilePreference;
@@ -169,6 +174,12 @@ internal static class VanillaModeCompatibilityPatches
             ProfileButtonTypeName,
             "_Ready",
             nameof(ProfileButtonReadyPostfix));
+
+        PatchMethodsByName(
+            harmony,
+            MainMenuTypeName,
+            "_Ready",
+            nameof(MainMenuReadyPostfix));
 
         PatchMethodsByName(
             harmony,
@@ -560,6 +571,72 @@ internal static class VanillaModeCompatibilityPatches
         {
             ProfileScreenSaveTypeUi.InstallInProfileButton(node);
         }
+    }
+
+    private static void MainMenuReadyPostfix(object __instance)
+    {
+        ClearSessionReconcilePreferenceOverrideIfNeeded();
+
+        if (__instance is Node node)
+        {
+            BootstrapSyncPromptUi.InstallInMainMenu(node);
+        }
+    }
+
+    public static void SetSessionReconcilePreferenceOverride(
+        SaveInteropService.ReconcilePreference preference,
+        string reason,
+        bool clearOnNextMainMenuReady,
+        bool clearOnFirstTargetSideWrite = false)
+    {
+        _sessionPreferenceOverride = preference;
+        _clearSessionPreferenceOverrideOnNextMainMenuReady = clearOnNextMainMenuReady;
+        _clearSessionPreferenceOverrideOnFirstTargetSideWrite = clearOnFirstTargetSideWrite;
+        Log.Info(
+            $"[BetterSaves] Set session reconcile preference override to '{preference}' ({reason}).");
+    }
+
+    private static void ClearSessionReconcilePreferenceOverrideIfNeeded()
+    {
+        if (!_clearSessionPreferenceOverrideOnNextMainMenuReady || !_sessionPreferenceOverride.HasValue)
+        {
+            return;
+        }
+
+        Log.Info(
+            $"[BetterSaves] Cleared session reconcile preference override '{_sessionPreferenceOverride.Value}' " +
+            "after reloading the main menu.");
+        _sessionPreferenceOverride = null;
+        _clearSessionPreferenceOverrideOnNextMainMenuReady = false;
+        _clearSessionPreferenceOverrideOnFirstTargetSideWrite = false;
+    }
+
+    public static bool TryFinalizeSessionReconcilePreferenceOverrideForSourcePath(string sourcePath)
+    {
+        if (!_clearSessionPreferenceOverrideOnFirstTargetSideWrite || !_sessionPreferenceOverride.HasValue)
+        {
+            return false;
+        }
+
+        var isModdedPath = sourcePath.Replace('/', '\\').Contains("\\modded\\", StringComparison.OrdinalIgnoreCase);
+        var shouldClear = _sessionPreferenceOverride.Value switch
+        {
+            SaveInteropService.ReconcilePreference.VanillaToModded => isModdedPath,
+            SaveInteropService.ReconcilePreference.ModdedToVanilla => !isModdedPath,
+            _ => false
+        };
+
+        if (!shouldClear)
+        {
+            return false;
+        }
+
+        Log.Info(
+            $"[BetterSaves] Cleared session reconcile preference override '{_sessionPreferenceOverride.Value}' " +
+            $"after the target side wrote '{sourcePath}'.");
+        _sessionPreferenceOverride = null;
+        _clearSessionPreferenceOverrideOnFirstTargetSideWrite = false;
+        return true;
     }
 
     private static void DebugInfoLabelManagerPostfix(object __instance)
