@@ -70,10 +70,12 @@ internal static class SaveInteropService
     private static readonly object InitLock = new();
     private static readonly object BootstrapPromptLock = new();
     private static readonly object BootstrapChoiceLock = new();
+    private static readonly object DataOnlyCloudSyncGuardLock = new();
     private static readonly List<AccountSyncRoot> SyncRoots = [];
     private static readonly CancellationTokenSource ReconcileCancellation = new();
     private static readonly SemaphoreSlim ImmediateReconcileSemaphore = new(1, 1);
     private static readonly TimeSpan BootstrapChoiceLockDuration = TimeSpan.FromSeconds(20);
+    private static readonly TimeSpan WatcherDuplicateWindow = TimeSpan.FromSeconds(2);
     private static BootstrapPromptRequest? _pendingBootstrapPrompt;
     private static string? _bootstrapTargetAccountRoot;
     private static string? _bootstrapChoiceAccountRoot;
@@ -83,6 +85,8 @@ internal static class SaveInteropService
     private static bool _isExecutingBootstrapImport;
     private static bool _skipBootstrapImportThisSession;
     private static bool _initialized;
+    private static List<DataOnlyCloudSyncGuard> _pendingDataOnlyCloudSyncGuards = [];
+    private static long _contentMutationVersion;
 
     public static void Initialize()
     {
@@ -384,6 +388,126 @@ internal static class SaveInteropService
         }
     }
 
+    public static long GetContentMutationVersion()
+    {
+        return Interlocked.Read(ref _contentMutationVersion);
+    }
+
+    public static void ReloadCurrentProfileFromDiskAfterInterop(string reason)
+    {
+        TryReloadCurrentProfileFromDisk(reason);
+    }
+
+    private static void RecordContentMutation()
+    {
+        Interlocked.Increment(ref _contentMutationVersion);
+    }
+
+    public static void BeginDataOnlyCloudSyncGuard()
+    {
+        if (!_initialized || BetterSavesConfig.CurrentMode != SyncMode.DataOnly)
+        {
+            return;
+        }
+
+        lock (DataOnlyCloudSyncGuardLock)
+        {
+            if (_pendingDataOnlyCloudSyncGuards.Count != 0)
+            {
+                return;
+            }
+        }
+
+        var vanillaMode = VanillaModeCompatibilityPatches.IsCompatibilityModeEnabled;
+        List<DataOnlyCloudSyncGuard> guards;
+        lock (InitLock)
+        {
+            guards = GetLikelyActiveSyncRoots()
+                .Select(root => root.TryCreateDataOnlyCloudSyncGuard(vanillaMode))
+                .OfType<DataOnlyCloudSyncGuard>()
+                .ToList();
+        }
+
+        if (guards.Count == 0)
+        {
+            return;
+        }
+
+        lock (DataOnlyCloudSyncGuardLock)
+        {
+            _pendingDataOnlyCloudSyncGuards = guards;
+        }
+
+        Log.Info(
+            $"[BetterSaves] Captured {guards.Count} DataOnly current-run cloud-sync guard snapshot(s) before SyncCloudToLocal.");
+    }
+
+    public static void RestoreDataOnlyCloudSyncGuardAfterSync(string reason)
+    {
+        if (!_initialized)
+        {
+            return;
+        }
+
+        List<DataOnlyCloudSyncGuard> guards;
+        lock (DataOnlyCloudSyncGuardLock)
+        {
+            if (_pendingDataOnlyCloudSyncGuards.Count == 0)
+            {
+                return;
+            }
+
+            guards = _pendingDataOnlyCloudSyncGuards;
+            _pendingDataOnlyCloudSyncGuards = [];
+        }
+
+        ImmediateReconcileSemaphore.Wait();
+        try
+        {
+            lock (InitLock)
+            {
+                foreach (var guard in guards)
+                {
+                    guard.Root.RestoreDataOnlyCloudSyncGuard(guard, reason);
+                }
+            }
+        }
+        finally
+        {
+            ImmediateReconcileSemaphore.Release();
+        }
+    }
+
+    public static bool ShouldDeferDataOnlyMetadataReconcile(string methodName)
+    {
+        if (!_initialized || BetterSavesConfig.CurrentMode != SyncMode.DataOnly)
+        {
+            return false;
+        }
+
+        if (methodName is not ("SavePrefsFile" or "SaveProgressFile" or "EndSaveBatch"))
+        {
+            return false;
+        }
+
+        lock (InitLock)
+        {
+            foreach (var syncRoot in GetLikelyActiveSyncRoots())
+            {
+                if (!syncRoot.HasAnyActiveSinglePlayerCurrentRun())
+                {
+                    continue;
+                }
+
+                Log.Info(
+                    $"[BetterSaves] Deferring DataOnly reconcile for '{methodName}' because an active single-player run is still in progress.");
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     public static bool TryGetPendingBootstrapPrompt(out BootstrapPromptRequest prompt)
     {
         lock (BootstrapPromptLock)
@@ -610,6 +734,10 @@ internal static class SaveInteropService
         private readonly FileSystemWatcher _watcher;
         private readonly ConcurrentDictionary<string, DateTime> _suppressedPaths =
             new(StringComparer.OrdinalIgnoreCase);
+        private readonly ConcurrentDictionary<string, RecentProcessedChange> _recentProcessedChanges =
+            new(StringComparer.OrdinalIgnoreCase);
+        private readonly ConcurrentDictionary<string, DateTime> _recentProcessedDeletions =
+            new(StringComparer.OrdinalIgnoreCase);
 
         private bool _disposed;
 
@@ -672,6 +800,101 @@ internal static class SaveInteropService
                 .Max();
         }
 
+        public DataOnlyCloudSyncGuard? TryCreateDataOnlyCloudSyncGuard(bool vanillaMode)
+        {
+            var profileIndex = TryGetActiveProfileIndex();
+            if (profileIndex is null)
+            {
+                return null;
+            }
+
+            var profileDir = GetProfileDirectory(profileIndex.Value, vanillaMode);
+            var snapshots = new List<GuardedFileSnapshot>();
+
+            foreach (var path in GetCurrentRunPairPaths(profileDir, isMultiplayer: false))
+            {
+                if (!TryReadStableFile(path, out var content, out var lastWriteTimeUtc))
+                {
+                    continue;
+                }
+
+                snapshots.Add(new GuardedFileSnapshot(path, content, lastWriteTimeUtc));
+            }
+
+            return snapshots.Count == 0
+                ? null
+                : new DataOnlyCloudSyncGuard(this, profileIndex.Value, vanillaMode, snapshots);
+        }
+
+        public void RestoreDataOnlyCloudSyncGuard(DataOnlyCloudSyncGuard guard, string reason)
+        {
+            if (!TryGetGuardedCurrentRunStartTime(guard, out var startTime))
+            {
+                Log.Info(
+                    $"[BetterSaves] Skipping DataOnly current-run restore for profile{guard.ProfileIndex} under '{_accountRoot}' " +
+                    $"because the guarded run files do not expose a valid start_time ({reason}).");
+                return;
+            }
+
+            var vanillaProfileDir = Path.Combine(_accountRoot, $"profile{guard.ProfileIndex}");
+            var moddedProfileDir = Path.Combine(_accountRoot, "modded", $"profile{guard.ProfileIndex}");
+            var historyPaths = GetHistoryEntryPathsForStartTime(vanillaProfileDir, moddedProfileDir, startTime, isMultiplayer: false)
+                .Where(File.Exists)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            if (historyPaths.Count > 0)
+            {
+                Log.Info(
+                    $"[BetterSaves] Skipping DataOnly current-run restore for profile{guard.ProfileIndex} under '{_accountRoot}' " +
+                    $"because matching history for start_time {startTime} already exists at '{string.Join("' and '", historyPaths)}' ({reason}).");
+                return;
+            }
+
+            var restoredAny = false;
+
+            foreach (var snapshot in guard.Files)
+            {
+                if (File.Exists(snapshot.Path))
+                {
+                    continue;
+                }
+
+                var directory = Path.GetDirectoryName(snapshot.Path);
+                if (!string.IsNullOrEmpty(directory))
+                {
+                    Directory.CreateDirectory(directory);
+                }
+
+                SuppressPath(snapshot.Path);
+                WriteFileWithRetries(snapshot.Path, snapshot.Content, snapshot.LastWriteTimeUtc);
+                RecordContentMutation();
+                restoredAny = true;
+                Log.Info(
+                    $"[BetterSaves] Restored local DataOnly current-run file '{snapshot.Path}' after cloud sync removed it ({reason}).");
+            }
+
+            if (restoredAny)
+            {
+                TryPurgeCompletedCurrentRunPair(vanillaProfileDir, moddedProfileDir, $"cloud-sync restore guard: {reason}", isMultiplayer: false);
+            }
+        }
+
+        private static bool TryGetGuardedCurrentRunStartTime(DataOnlyCloudSyncGuard guard, out long startTime)
+        {
+            startTime = default;
+
+            foreach (var snapshot in guard.Files)
+            {
+                if (TryGetCurrentRunStartTime(snapshot.Content, out startTime))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
         public void RestorePreferredProfileSelection(bool vanillaMode)
         {
             var currentProfileId = TryGetActiveProfileIndex();
@@ -680,9 +903,13 @@ internal static class SaveInteropService
                 return;
             }
 
-            if (BetterSavesConfig.CurrentMode == SyncMode.SaveOnly
-                && TryRealignSaveOnlyProfileSelection(vanillaMode, currentProfileId.Value))
+            if (BetterSavesConfig.CurrentMode == SyncMode.SaveOnly)
             {
+                BetterSavesConfig.SetPreferredProfileId(true, currentProfileId.Value);
+                BetterSavesConfig.SetPreferredProfileId(false, currentProfileId.Value);
+                Log.Info(
+                    $"[BetterSaves] Preserving current {(vanillaMode ? "vanilla" : "modded")} profile {currentProfileId.Value} " +
+                    "for save-only mode based on profile.save.");
                 return;
             }
 
@@ -710,46 +937,6 @@ internal static class SaveInteropService
                     $"[BetterSaves] Keeping current {(vanillaMode ? "vanilla" : "modded")} profile {currentProfileId.Value} " +
                     "for mode-specific profile selection.");
             }
-        }
-
-        private bool TryRealignSaveOnlyProfileSelection(bool vanillaMode, int currentProfileId)
-        {
-            if (!HasSinglePlayerCurrentRun(currentProfileId, vanillaMode))
-            {
-                return false;
-            }
-
-            var currentScore = GetProfileProgressScore(currentProfileId, vanillaMode);
-            var recoveryCandidate = Enumerable.Range(1, 3)
-                .Where(index => index != currentProfileId)
-                .Select(index => new
-                {
-                    ProfileIndex = index,
-                    Score = GetProfileProgressScore(index, vanillaMode)
-                })
-                .Where(entry => entry.Score >= 16384 && entry.Score >= Math.Max(1, currentScore) * 4)
-                .OrderByDescending(entry => entry.Score)
-                .ThenBy(entry => entry.ProfileIndex)
-                .FirstOrDefault();
-
-            if (recoveryCandidate is null)
-            {
-                return false;
-            }
-
-            CopyCurrentRunBetweenProfiles(currentProfileId, recoveryCandidate.ProfileIndex, vanillaMode);
-            CopyCurrentRunBetweenProfiles(currentProfileId, recoveryCandidate.ProfileIndex, !vanillaMode);
-
-            SetActiveProfileIndex(
-                recoveryCandidate.ProfileIndex,
-                $"realigning save-only profile selection from low-data slot {currentProfileId}");
-
-            BetterSavesConfig.SetPreferredProfileId(true, recoveryCandidate.ProfileIndex);
-            BetterSavesConfig.SetPreferredProfileId(false, recoveryCandidate.ProfileIndex);
-            Log.Info(
-                $"[BetterSaves] Save-only realignment selected profile {recoveryCandidate.ProfileIndex} " +
-                $"over low-data slot {currentProfileId} (score {currentScore} vs {recoveryCandidate.Score}).");
-            return true;
         }
 
         public void PropagateCurrentRunDeletion(
@@ -1248,6 +1435,7 @@ internal static class SaveInteropService
                 });
 
                 File.WriteAllText(profileSavePath, payload);
+                RecordContentMutation();
                 Log.Info(
                     $"[BetterSaves] Set active profile to {profileIndex} under '{_accountRoot}' " +
                     $"({reason}; previous profile was {currentProfileId}).");
@@ -1258,58 +1446,18 @@ internal static class SaveInteropService
             }
         }
 
-        private long GetProfileProgressScore(int profileIndex, bool vanillaMode)
-        {
-            var profileDir = GetProfileDirectory(profileIndex, vanillaMode);
-            var progressSavePath = Path.Combine(profileDir, "saves", "progress.save");
-
-            if (!File.Exists(progressSavePath))
-            {
-                return 0;
-            }
-
-            try
-            {
-                return new FileInfo(progressSavePath).Length;
-            }
-            catch
-            {
-                return 0;
-            }
-        }
-
         private bool HasSinglePlayerCurrentRun(int profileIndex, bool vanillaMode)
         {
             var profileDir = GetProfileDirectory(profileIndex, vanillaMode);
             return GetCurrentRunPairPaths(profileDir, isMultiplayer: false).Any(File.Exists);
         }
 
-        private void CopyCurrentRunBetweenProfiles(int sourceProfileIndex, int targetProfileIndex, bool vanillaMode)
+        public bool HasAnyActiveSinglePlayerCurrentRun()
         {
-            if (sourceProfileIndex == targetProfileIndex)
-            {
-                return;
-            }
-
-            var sourceProfileDir = GetProfileDirectory(sourceProfileIndex, vanillaMode);
-            var targetProfileDir = GetProfileDirectory(targetProfileIndex, vanillaMode);
-
-            foreach (var fileName in new[] { "current_run.save", "current_run.save.backup" })
-            {
-                var sourcePath = Path.Combine(sourceProfileDir, "saves", fileName);
-                if (!File.Exists(sourcePath))
-                {
-                    continue;
-                }
-
-                var targetPath = Path.Combine(targetProfileDir, "saves", fileName);
-                if (File.Exists(targetPath))
-                {
-                    continue;
-                }
-
-                CopyFileSafely(sourcePath, targetPath, "save-only profile realignment");
-            }
+            var activeProfileIndex = TryGetActiveProfileIndex();
+            return activeProfileIndex is not null
+                   && (HasSinglePlayerCurrentRun(activeProfileIndex.Value, vanillaMode: true)
+                       || HasSinglePlayerCurrentRun(activeProfileIndex.Value, vanillaMode: false));
         }
 
         private string GetProfileDirectory(int profileIndex, bool vanillaMode)
@@ -1359,6 +1507,11 @@ internal static class SaveInteropService
                 return;
             }
 
+            if (ShouldSkipDuplicateChange(eventArgs.FullPath))
+            {
+                return;
+            }
+
             var preference = GetEffectiveReconcilePreferenceForPath(
                 eventArgs.FullPath,
                 VanillaModeCompatibilityPatches.CurrentReconcilePreference);
@@ -1399,6 +1552,11 @@ internal static class SaveInteropService
                 return;
             }
 
+            if (ShouldSkipDuplicateDeletion(eventArgs.FullPath))
+            {
+                return;
+            }
+
             var preference = GetEffectiveReconcilePreferenceForPath(
                 eventArgs.FullPath,
                 VanillaModeCompatibilityPatches.CurrentReconcilePreference);
@@ -1423,6 +1581,7 @@ internal static class SaveInteropService
                 return;
             }
 
+            RememberProcessedDeletion(eventArgs.FullPath);
             DeleteFileSafely(counterpartPath, eventArgs.ChangeType.ToString());
         }
 
@@ -1469,12 +1628,62 @@ internal static class SaveInteropService
             }
 
             if (!IsSuppressed(eventArgs.OldFullPath)
+                && !ShouldSkipDuplicateDeletion(eventArgs.OldFullPath)
                 && TryGetCounterpartPath(eventArgs.OldFullPath, out var oldCounterpartPath))
             {
+                RememberProcessedDeletion(eventArgs.OldFullPath);
                 DeleteFileSafely(oldCounterpartPath, "Renamed");
             }
 
             OnFileChanged(sender, eventArgs);
+        }
+
+        private bool ShouldSkipDuplicateChange(string path)
+        {
+            if (!_recentProcessedChanges.TryGetValue(path, out var recent))
+            {
+                return false;
+            }
+
+            if (recent.ExpiresUtc <= DateTime.UtcNow)
+            {
+                _recentProcessedChanges.TryRemove(path, out _);
+                return false;
+            }
+
+            var snapshot = FileSnapshot.TryCreate(path);
+            return snapshot is not null
+                   && snapshot.Value.Length == recent.Length
+                   && snapshot.Value.LastWriteTimeUtc == recent.LastWriteTimeUtc;
+        }
+
+        private void RememberProcessedChange(string path, long length, DateTime lastWriteTimeUtc)
+        {
+            _recentProcessedChanges[path] = new RecentProcessedChange(
+                length,
+                lastWriteTimeUtc,
+                DateTime.UtcNow.Add(WatcherDuplicateWindow));
+        }
+
+        private bool ShouldSkipDuplicateDeletion(string path)
+        {
+            if (!_recentProcessedDeletions.TryGetValue(path, out var expiration))
+            {
+                return false;
+            }
+
+            if (expiration <= DateTime.UtcNow)
+            {
+                _recentProcessedDeletions.TryRemove(path, out _);
+                return false;
+            }
+
+            return true;
+        }
+
+        private void RememberProcessedDeletion(string path)
+        {
+            _recentProcessedDeletions[path] = DateTime.UtcNow.Add(WatcherDuplicateWindow);
         }
 
         private ReconcilePreference GetEffectiveReconcilePreferenceForPath(
@@ -1726,6 +1935,11 @@ internal static class SaveInteropService
                 return protectedSource;
             }
 
+            if (TryDetermineProgressSemanticPreferredSource(firstPath, secondPath, out var progressSemanticSource))
+            {
+                return progressSemanticSource;
+            }
+
             if (TryDetermineSinglePlayerDataPreferredSource(firstPath, secondPath, out var guardedSource))
             {
                 return guardedSource;
@@ -1771,6 +1985,52 @@ internal static class SaveInteropService
             return firstSnapshot.Value.Length >= secondSnapshot.Value.Length
                 ? SourceSide.First
                 : SourceSide.Second;
+        }
+
+        private bool TryDetermineProgressSemanticPreferredSource(
+            string firstPath,
+            string secondPath,
+            out SourceSide preferredSource)
+        {
+            preferredSource = SourceSide.None;
+
+            if (!TryGetProfileRelativePath(firstPath, out var firstRelativePath)
+                || !TryGetProfileRelativePath(secondPath, out var secondRelativePath))
+            {
+                return false;
+            }
+
+            var normalizedFirstRelativePath = NormalizeRelativePath(firstRelativePath);
+            if (!normalizedFirstRelativePath.Equals(
+                    NormalizeRelativePath(secondRelativePath),
+                    StringComparison.OrdinalIgnoreCase)
+                || normalizedFirstRelativePath is not ("saves/progress.save" or "saves/progress.save.backup"))
+            {
+                return false;
+            }
+
+            var firstState = GetProgressSemanticState(firstPath);
+            var secondState = GetProgressSemanticState(secondPath);
+
+            if (firstState.IsMeaningfullyRicherThan(secondState))
+            {
+                preferredSource = SourceSide.First;
+                Log.Info(
+                    $"[BetterSaves] Preferred semantically richer progress source '{firstPath}' over '{secondPath}' " +
+                    $"for '{normalizedFirstRelativePath}'. First={firstState}; Second={secondState}.");
+                return true;
+            }
+
+            if (secondState.IsMeaningfullyRicherThan(firstState))
+            {
+                preferredSource = SourceSide.Second;
+                Log.Info(
+                    $"[BetterSaves] Preferred semantically richer progress source '{secondPath}' over '{firstPath}' " +
+                    $"for '{normalizedFirstRelativePath}'. First={firstState}; Second={secondState}.");
+                return true;
+            }
+
+            return false;
         }
 
         private bool TryDetermineBootstrapProtectedPreferredSource(
@@ -1943,6 +2203,8 @@ internal static class SaveInteropService
 
                 SuppressPath(targetPath);
                 WriteFileWithRetries(targetPath, content, lastWriteTimeUtc);
+                RecordContentMutation();
+                RememberProcessedChange(sourcePath, content.LongLength, lastWriteTimeUtc);
                 CloudMirrorService.MirrorFile(_accountRoot, targetPath);
                 MaybeRecordPreferredProfileFromPath(sourcePath, reason);
 
@@ -2655,6 +2917,124 @@ internal static class SaveInteropService
                 GetFileLengthSafe(prefsSavePath));
         }
 
+        private static ProgressSemanticState GetProgressSemanticState(string path)
+        {
+            if (!TryReadStableFile(path, out var content, out _))
+            {
+                return default;
+            }
+
+            try
+            {
+                using var document = JsonDocument.Parse(content);
+                if (document.RootElement.ValueKind != JsonValueKind.Object)
+                {
+                    return default;
+                }
+
+                var revealedEpochs = 0;
+                var obtainedEpochs = 0;
+                var revealedEpochIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var obtainedEpochIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                if (document.RootElement.TryGetProperty("epochs", out var epochsElement)
+                    && epochsElement.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var epochElement in epochsElement.EnumerateArray())
+                    {
+                        var epochId = epochElement.TryGetProperty("id", out var epochIdElement)
+                                      && epochIdElement.ValueKind == JsonValueKind.String
+                            ? epochIdElement.GetString() ?? string.Empty
+                            : string.Empty;
+
+                        if (!epochElement.TryGetProperty("state", out var stateElement)
+                            || stateElement.ValueKind != JsonValueKind.String)
+                        {
+                            continue;
+                        }
+
+                        var state = stateElement.GetString();
+                        if (string.Equals(state, "revealed", StringComparison.OrdinalIgnoreCase))
+                        {
+                            revealedEpochs++;
+                            if (!string.IsNullOrWhiteSpace(epochId))
+                            {
+                                revealedEpochIds.Add(epochId);
+                            }
+                        }
+                        else if (string.Equals(state, "obtained", StringComparison.OrdinalIgnoreCase))
+                        {
+                            obtainedEpochs++;
+                            if (!string.IsNullOrWhiteSpace(epochId))
+                            {
+                                obtainedEpochIds.Add(epochId);
+                            }
+                        }
+                    }
+                }
+
+                var characterIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                if (document.RootElement.TryGetProperty("character_stats", out var characterStatsElement)
+                    && characterStatsElement.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var characterStatElement in characterStatsElement.EnumerateArray())
+                    {
+                        if (!characterStatElement.TryGetProperty("id", out var characterIdElement)
+                            || characterIdElement.ValueKind != JsonValueKind.String)
+                        {
+                            continue;
+                        }
+
+                        var characterId = characterIdElement.GetString();
+                        if (!string.IsNullOrWhiteSpace(characterId))
+                        {
+                            characterIds.Add(characterId);
+                        }
+                    }
+                }
+
+                var totalUnlocks = document.RootElement.TryGetProperty("total_unlocks", out var totalUnlocksElement)
+                    ? totalUnlocksElement.ValueKind switch
+                    {
+                        JsonValueKind.Number => totalUnlocksElement.GetInt32(),
+                        JsonValueKind.String when int.TryParse(totalUnlocksElement.GetString(), out var parsed) => parsed,
+                        _ => 0
+                    }
+                    : 0;
+
+                var achievementIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                if (document.RootElement.TryGetProperty("unlocked_achievements", out var achievementsElement)
+                    && achievementsElement.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var achievementElement in achievementsElement.EnumerateArray())
+                    {
+                        if (achievementElement.ValueKind != JsonValueKind.String)
+                        {
+                            continue;
+                        }
+
+                        var achievementId = achievementElement.GetString();
+                        if (!string.IsNullOrWhiteSpace(achievementId))
+                        {
+                            achievementIds.Add(achievementId);
+                        }
+                    }
+                }
+
+                return new ProgressSemanticState(
+                    revealedEpochs,
+                    obtainedEpochs,
+                    revealedEpochIds,
+                    obtainedEpochIds,
+                    characterIds,
+                    totalUnlocks,
+                    achievementIds);
+            }
+            catch
+            {
+                return default;
+            }
+        }
+
         private static long GetFileLengthSafe(string path)
         {
             if (!File.Exists(path))
@@ -2890,6 +3270,18 @@ internal static class SaveInteropService
                 return false;
             }
 
+            return TryGetCurrentRunStartTime(content, out startTime);
+        }
+
+        private static bool TryGetCurrentRunStartTime(byte[] content, out long startTime)
+        {
+            startTime = default;
+
+            if (content.Length == 0)
+            {
+                return false;
+            }
+
             try
             {
                 using var document = JsonDocument.Parse(content);
@@ -2946,6 +3338,7 @@ internal static class SaveInteropService
                     {
                         SuppressPath(targetPath);
                         File.Delete(targetPath);
+                        RecordContentMutation();
                         CloudMirrorService.DeleteFile(_accountRoot, targetPath);
                         Log.Info($"[BetterSaves] Deleted '{targetPath}' ({reason}).");
                         return;
@@ -3096,6 +3489,17 @@ internal static class SaveInteropService
         BootstrapImportAction Action,
         string Reason);
 
+    private sealed record GuardedFileSnapshot(
+        string Path,
+        byte[] Content,
+        DateTime LastWriteTimeUtc);
+
+    private sealed record DataOnlyCloudSyncGuard(
+        AccountSyncRoot Root,
+        int ProfileIndex,
+        bool VanillaMode,
+        IReadOnlyList<GuardedFileSnapshot> Files);
+
     private readonly record struct BootstrapDecision(
         bool ShouldHandle,
         BootstrapPromptKind? PromptKind,
@@ -3141,6 +3545,11 @@ internal static class SaveInteropService
             return new FileSnapshot(fileInfo.Length, fileInfo.LastWriteTimeUtc);
         }
     }
+
+    private readonly record struct RecentProcessedChange(
+        long Length,
+        DateTime LastWriteTimeUtc,
+        DateTime ExpiresUtc);
 
     private readonly record struct SinglePlayerDataState(
         long ProgressLength,
@@ -3219,6 +3628,86 @@ internal static class SaveInteropService
             return
                 $"progress_len={ProgressLength}, progress_score={ProgressCollectionScore}, history={HistoryEntryCount}, " +
                 $"sp_run={HasSinglePlayerCurrentRun}, mp_run={HasMultiplayerCurrentRun}, prefs_len={PrefsLength}, score={Score}";
+        }
+    }
+
+    private readonly record struct ProgressSemanticState(
+        int RevealedEpochCount,
+        int ObtainedEpochCount,
+        HashSet<string> RevealedEpochIds,
+        HashSet<string> ObtainedEpochIds,
+        HashSet<string> CharacterIds,
+        int TotalUnlocks,
+        HashSet<string> AchievementIds)
+    {
+        private int CharacterCount => CharacterIds?.Count ?? 0;
+        private int AchievementCount => AchievementIds?.Count ?? 0;
+        private int RevealedEpochIdCount => RevealedEpochIds?.Count ?? 0;
+        private int ObtainedEpochIdCount => ObtainedEpochIds?.Count ?? 0;
+
+        public long Score =>
+            (ObtainedEpochCount * 10L)
+            + (RevealedEpochCount * 6L)
+            + (CharacterCount * 8L)
+            + (TotalUnlocks * 4L)
+            + AchievementCount;
+
+        public bool IsMeaningfullyRicherThan(ProgressSemanticState other)
+        {
+            if (Score == 0)
+            {
+                return false;
+            }
+
+            if (other.Score == 0)
+            {
+                return true;
+            }
+
+            var strictlyContainsOtherSemanticProgress =
+                ContainsAll(RevealedEpochIds, other.RevealedEpochIds)
+                && ContainsAll(ObtainedEpochIds, other.ObtainedEpochIds)
+                && ContainsAll(CharacterIds, other.CharacterIds)
+                && ContainsAll(AchievementIds, other.AchievementIds)
+                && (RevealedEpochIdCount > other.RevealedEpochIdCount
+                    || ObtainedEpochIdCount > other.ObtainedEpochIdCount
+                    || CharacterCount > other.CharacterCount
+                    || AchievementCount > other.AchievementCount
+                    || TotalUnlocks > other.TotalUnlocks);
+
+            if (strictlyContainsOtherSemanticProgress)
+            {
+                return true;
+            }
+
+            return Score > other.Score
+                && (ObtainedEpochCount > other.ObtainedEpochCount
+                    || RevealedEpochCount > other.RevealedEpochCount
+                    || CharacterCount > other.CharacterCount
+                    || TotalUnlocks > other.TotalUnlocks
+                    || AchievementCount > other.AchievementCount);
+        }
+
+        private static bool ContainsAll(HashSet<string>? candidate, HashSet<string>? other)
+        {
+            if (other is null || other.Count == 0)
+            {
+                return true;
+            }
+
+            if (candidate is null || candidate.Count == 0)
+            {
+                return false;
+            }
+
+            return other.All(candidate.Contains);
+        }
+
+        public override string ToString()
+        {
+            return
+                $"revealed_epochs={RevealedEpochCount}, obtained_epochs={ObtainedEpochCount}, " +
+                $"characters={CharacterCount}, total_unlocks={TotalUnlocks}, achievements={AchievementCount}, score={Score}";
         }
     }
 }

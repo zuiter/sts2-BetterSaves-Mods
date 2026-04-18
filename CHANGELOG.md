@@ -1,5 +1,29 @@
 ﻿# Changelog
 
+## 0.4.0 - 2026-04-19
+
+### English
+
+- Fixed `Save Only` startup slot restoration so BetterSaves now preserves the slot currently pointed to by `profile.save` instead of auto-jumping to another "richer" slot.
+- Fixed the "first launch after switching sides" delay by reloading the current profile from disk after `SyncCloudToLocal` only when BetterSaves actually changed synced files during that startup reconciliation.
+- Changed `Data Only` launches to use automatic direction selection instead of always forcing `modded -> vanilla`, so new timeline/progression changes can flow the correct way on the first switch.
+- Added semantic `progress.save` source selection that compares concrete epoch, character, unlock, and achievement sets, reducing cases where stale progress overwrote newly unlocked timeline data.
+- Added guarded `Data Only` startup protection for local single-player current-run files so cloud sync no longer strips a local in-progress run unless there is evidence that the run has already been completed and recorded in history.
+- Hardened progress semantic comparisons against null/default states so save interop no longer fails to initialize when a `progress.save` cannot be parsed or is temporarily unavailable.
+- Reduced duplicate watcher-driven sync work by suppressing repeated processing of unchanged file snapshots and short-window duplicate delete events, which cuts down repeated `Mirrored ...` logs and lowers file-watcher overflow risk.
+- Cleaned up stale bootstrap prompt UI code that no longer had an active hook, reducing maintenance noise.
+
+### 中文
+
+- 修复“仅同步存档”模式下的启动槽位恢复问题：现在会保留 `profile.save` 当前指向的槽位，不再因为别的槽位看起来更“成熟”就自动跳过去。
+- 修复切换到另一边后“第一次启动看不到同步结果、要第二次启动才显示”的问题：`SyncCloudToLocal` 完成后，如果 BetterSaves 在本次启动里确实改动了同步文件，会受控地重载当前 profile 数据。
+- 调整“仅同步数据”模式在带模组启动时的选源方向，不再固定强制 `modded -> vanilla`，而是改为自动判定，让新产生的时间线/进度变化能够在第一次切边时按正确方向流动。
+- 为 `progress.save` 增加语义级选源：现在会比较具体的 epoch、角色、解锁与成就集合，降低旧进度把新解锁的时间线数据反向覆盖掉的概率。
+- 增加“仅同步数据”模式下的启动保护：当云同步错误移除本地单人当前局时，BetterSaves 只会在没有完成记录证据的情况下恢复本地当前局，避免重进后误丢进度。
+- 强化 `progress.save` 语义比较的空安全处理，避免某些 `progress.save` 临时不可读或解析失败时，直接导致 save interop 初始化失败。
+- 增加 watcher 去重/防抖：对同一路径、同一快照的重复变更和短时间重复删除事件只处理一次，减少重复 `Mirrored ...` 日志并降低文件监听器溢出的风险。
+- 清理 bootstrap prompt UI 中已失效的残留逻辑，简化代码路径并减轻后续维护负担。
+
 ## 0.3.0 - 2026-04-15
 
 ### English

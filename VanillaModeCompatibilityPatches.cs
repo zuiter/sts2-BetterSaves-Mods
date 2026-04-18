@@ -65,7 +65,9 @@ internal static class VanillaModeCompatibilityPatches
         _sessionPreferenceOverride
         ?? (ShouldForceVanillaMode()
             ? SaveInteropService.ReconcilePreference.Auto
-            : SaveInteropService.ReconcilePreference.ModdedToVanilla);
+            : BetterSavesConfig.CurrentMode == SyncMode.DataOnly
+                ? SaveInteropService.ReconcilePreference.Auto
+                : SaveInteropService.ReconcilePreference.ModdedToVanilla);
 
     public static SaveInteropService.ReconcilePreference StartupReconcilePreference =>
         CurrentReconcilePreference;
@@ -455,6 +457,11 @@ internal static class VanillaModeCompatibilityPatches
             return;
         }
 
+        if (SaveInteropService.ShouldDeferDataOnlyMetadataReconcile(__originalMethod.Name))
+        {
+            return;
+        }
+
         SaveInteropService.ReconcileNow(
             $"save hook: {__originalMethod.Name}",
             GetCurrentReconcilePreference());
@@ -488,7 +495,17 @@ internal static class VanillaModeCompatibilityPatches
 
     private static void ImmediateReconcileTaskPostfix(ref Task? __result, MethodBase __originalMethod)
     {
+        if (string.Equals(__originalMethod.Name, "SyncCloudToLocal", StringComparison.Ordinal))
+        {
+            SaveInteropService.BeginDataOnlyCloudSyncGuard();
+        }
+
         if (!ShouldReconcileForMethod(__originalMethod.Name))
+        {
+            return;
+        }
+
+        if (SaveInteropService.ShouldDeferDataOnlyMetadataReconcile(__originalMethod.Name))
         {
             return;
         }
@@ -516,14 +533,23 @@ internal static class VanillaModeCompatibilityPatches
         }
         finally
         {
+            var mutationVersionBeforePostTaskReconcile = 0L;
             if (string.Equals(methodName, "SyncCloudToLocal", StringComparison.Ordinal))
             {
+                mutationVersionBeforePostTaskReconcile = SaveInteropService.GetContentMutationVersion();
+                SaveInteropService.RestoreDataOnlyCloudSyncGuardAfterSync($"save hook: {methodName}");
                 SaveInteropService.RestorePreferredProfileSelectionForCurrentMode();
             }
 
             SaveInteropService.ReconcileNow(
                 $"save hook: {methodName}",
                 GetTaskReconcilePreference(methodName));
+
+            if (string.Equals(methodName, "SyncCloudToLocal", StringComparison.Ordinal)
+                && SaveInteropService.GetContentMutationVersion() != mutationVersionBeforePostTaskReconcile)
+            {
+                SaveInteropService.ReloadCurrentProfileFromDiskAfterInterop($"save hook: {methodName}");
+            }
         }
     }
 
