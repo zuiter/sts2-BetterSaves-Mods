@@ -11,6 +11,7 @@
 - Added guarded `Data Only` startup protection for local single-player current-run files so cloud sync no longer strips a local in-progress run unless there is evidence that the run has already been completed and recorded in history.
 - Hardened progress semantic comparisons against null/default states so save interop no longer fails to initialize when a `progress.save` cannot be parsed or is temporarily unavailable.
 - Reduced duplicate watcher-driven sync work by suppressing repeated processing of unchanged file snapshots and short-window duplicate delete events, which cuts down repeated `Mirrored ...` logs and lowers file-watcher overflow risk.
+- Fixed the English sync-mode title on the modding settings screen being auto-shrunk by the game's `MegaLabel` sizing logic, so it now matches the Chinese title's display style more closely.
 - Cleaned up stale bootstrap prompt UI code that no longer had an active hook, reducing maintenance noise.
 
 ### 中文
@@ -22,6 +23,7 @@
 - 增加“仅同步数据”模式下的启动保护：当云同步错误移除本地单人当前局时，BetterSaves 只会在没有完成记录证据的情况下恢复本地当前局，避免重进后误丢进度。
 - 强化 `progress.save` 语义比较的空安全处理，避免某些 `progress.save` 临时不可读或解析失败时，直接导致 save interop 初始化失败。
 - 增加 watcher 去重/防抖：对同一路径、同一快照的重复变更和短时间重复删除事件只处理一次，减少重复 `Mirrored ...` 日志并降低文件监听器溢出的风险。
+- 修复模组设置页面中英文互通模式标题被游戏原生 `MegaLabel` 自动缩小的问题，使英文显示效果更接近中文标题。
 - 清理 bootstrap prompt UI 中已失效的残留逻辑，简化代码路径并减轻后续维护负担。
 
 ## 0.3.0 - 2026-04-15

@@ -1214,10 +1214,10 @@ internal static class SaveInteropService
             switch (request.Action)
             {
                 case BootstrapImportAction.VanillaToModded:
-                    CopyTreeOneWay(vanillaProfileDir, moddedProfileDir, $"confirmed bootstrap import ({source})");
+                    CopyBootstrapTreeOneWay(vanillaProfileDir, moddedProfileDir, $"confirmed bootstrap import ({source})");
                     break;
                 case BootstrapImportAction.ModdedToVanilla:
-                    CopyTreeOneWay(moddedProfileDir, vanillaProfileDir, $"confirmed bootstrap import ({source})");
+                    CopyBootstrapTreeOneWay(moddedProfileDir, vanillaProfileDir, $"confirmed bootstrap import ({source})");
                     break;
             }
         }
@@ -1479,6 +1479,27 @@ internal static class SaveInteropService
 
             foreach (var relativeFile in relativeFiles
                          .Where(IsSyncableProfileRelativePath)
+                         .OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
+            {
+                var sourcePath = Path.Combine(sourceRoot, relativeFile);
+                var targetPath = Path.Combine(targetRoot, relativeFile);
+                CopyFileSafely(sourcePath, targetPath, reason);
+            }
+        }
+
+        private void CopyBootstrapTreeOneWay(string sourceRoot, string targetRoot, string reason)
+        {
+            if (!Directory.Exists(sourceRoot))
+            {
+                return;
+            }
+
+            var relativeFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            CollectRelativeFiles(sourceRoot, relativeFiles);
+
+            foreach (var relativeFile in relativeFiles
+                         .Select(NormalizeRelativePath)
+                         .Where(path => !IsEphemeralProfileRelativePath(path))
                          .OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
             {
                 var sourcePath = Path.Combine(sourceRoot, relativeFile);

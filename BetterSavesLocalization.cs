@@ -14,7 +14,7 @@ internal static class BetterSavesLocalization
 
     public static string GetPanelTitle()
     {
-        return IsChinese() ? "BetterSaves互通模式" : "BetterSaves Interop Mode";
+        return IsChinese() ? "BetterSaves互通模式" : "BetterSaves Sync Mode";
     }
 
     public static string GetPanelDescription()

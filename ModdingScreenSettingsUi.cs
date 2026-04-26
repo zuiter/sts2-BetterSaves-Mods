@@ -14,7 +14,12 @@ internal static class ModdingScreenSettingsUi
     private const string NativePaginatorIndexMetaName = "_better_saves_native_paginator_index";
     private const string ValueDisplayBaseScaleMetaName = "_better_saves_value_display_base_scale";
     private const string ValueDisplayBaseModulateMetaName = "_better_saves_value_display_base_modulate";
+    private const string MegaLabelTypeName = "MegaCrit.Sts2.addons.mega_text.MegaLabel";
     private const string NativePaginatorTypeName = "MegaCrit.Sts2.Core.Nodes.Screens.Settings.NPaginator";
+    private static readonly Type? MegaLabelType = AccessTools.TypeByName(MegaLabelTypeName);
+    private static readonly PropertyInfo? MegaLabelAutoSizeEnabledProperty = MegaLabelType is null
+        ? null
+        : AccessTools.Property(MegaLabelType, "AutoSizeEnabled");
     private static readonly Type? NativePaginatorType = AccessTools.TypeByName(NativePaginatorTypeName);
     private static readonly FieldInfo? PaginatorOptionsField = NativePaginatorType is null
         ? null
@@ -221,6 +226,7 @@ internal static class ModdingScreenSettingsUi
         label.SizeFlagsVertical = Control.SizeFlags.ShrinkCenter;
         label.MouseFilter = Control.MouseFilterEnum.Ignore;
         label.HorizontalAlignment = HorizontalAlignment.Left;
+        DisableMegaLabelAutoSize(label);
         label.Text = BetterSavesLocalization.GetPanelTitle();
         label.Visible = true;
         return label;
@@ -321,6 +327,28 @@ internal static class ModdingScreenSettingsUi
         if (textProperty?.CanWrite == true && textProperty.PropertyType == typeof(string))
         {
             textProperty.SetValue(control, text);
+        }
+    }
+
+    private static void DisableMegaLabelAutoSize(Control control)
+    {
+        if (MegaLabelType is null || !MegaLabelType.IsInstanceOfType(control))
+        {
+            return;
+        }
+
+        if (MegaLabelAutoSizeEnabledProperty?.CanWrite != true)
+        {
+            return;
+        }
+
+        try
+        {
+            MegaLabelAutoSizeEnabledProperty.SetValue(control, false);
+        }
+        catch
+        {
+            // If the game changes this control, keeping the label visible is more important than forcing sizing.
         }
     }
 

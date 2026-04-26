@@ -1,0 +1,10 @@
+{
+  "directives": [
+    {
+      "directive": "After every code change in this project, perform an explicit self-review of the diff for regressions and unintended behavior changes, then run relevant verification before reporting completion.",
+      "priority": "high",
+      "context": "User requested automatic review after each change to ensure existing functionality is not affected.",
+      "timestamp": "2026-04-26T21:43:30.287Z"
+    }
+  ]
+}
