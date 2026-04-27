@@ -247,10 +247,24 @@ internal static class BetterSavesConfig
             }
 
             var json = File.ReadAllText(configPath);
+            var hasBootstrapState = false;
+            using (var document = JsonDocument.Parse(json))
+            {
+                hasBootstrapState = document.RootElement.ValueKind == JsonValueKind.Object
+                    && document.RootElement.EnumerateObject()
+                        .Any(property => property.NameEquals(nameof(BetterSavesConfigData.BootstrapState)));
+            }
+
             var config = JsonSerializer.Deserialize<BetterSavesConfigData>(json, JsonOptions)
                 ?? new BetterSavesConfigData();
             config.ModdedMultiplayerLocalPlayerIds ??= new Dictionary<string, ulong>();
-            if (config.BootstrapState == FirstSyncBootstrapState.Conflict)
+            if (!hasBootstrapState)
+            {
+                config.BootstrapState = FirstSyncBootstrapState.Pending;
+                SaveUnsafe(config);
+                Log.Info("[BetterSaves] Migrated legacy config without first-sync bootstrap state to Pending.");
+            }
+            else if (config.BootstrapState == FirstSyncBootstrapState.Conflict)
             {
                 config.BootstrapState = FirstSyncBootstrapState.Resolved;
             }

@@ -609,9 +609,7 @@ internal static class SaveInteropService
         }
 
         _skipBootstrapImportThisSession = true;
-        BetterSavesConfig.SetBootstrapState(
-            FirstSyncBootstrapState.Resolved,
-            $"user skipped bootstrap import ({source})");
+        Log.Info($"[BetterSaves] Skipped first-sync bootstrap import for this session only ({source}).");
         return true;
     }
 

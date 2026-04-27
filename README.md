@@ -2,7 +2,7 @@
 
 English documentation. For Simplified Chinese, see [**简体中文**](README_ZH.md).
 
-![Version](https://img.shields.io/badge/Version-0.4.0-blue.svg)
+![Version](https://img.shields.io/badge/Version-0.4.1-blue.svg)
 ![Game](https://img.shields.io/badge/Slay_The_Spire_2-Mod-red.svg)
 ![Platform](https://img.shields.io/badge/Platform-Windows%20|%20Linux-lightgrey.svg)
 
@@ -35,6 +35,8 @@ English documentation. For Simplified Chinese, see [**简体中文**](README_ZH.
 - The first time BetterSaves manages an existing profile, it asks which side should be authoritative for that slot: `Use Vanilla` or `Use Modded`.
 - BetterSaves creates a backup snapshot before this first reconciliation so you can manually recover the slot if needed.
 - Until you confirm that first-sync choice, BetterSaves will avoid automatically reconciling the protected single-player files for that slot.
+- If you close or skip the first-sync prompt, BetterSaves skips the import only for the current session and will ask again next launch.
+- Legacy configs created before the first-sync state existed are moved back into the pending first-sync flow so existing saves are not treated as already confirmed by accident.
 
 ### Backup Location
 
@@ -74,7 +76,7 @@ Linux uses the same mod folder layout as Windows, but the game executable and Go
 3. Start the game normally from Steam or your local executable.
 4. The mod will be enabled automatically on launch.
 
-> **Compatibility note:** All players must use the same mod version. Local settings may differ safely; only the host's configured limit determines how many players can actually join the lobby.
+> **Compatibility note:** When sharing saves across devices or between vanilla and modded launches, using the same BetterSaves version on each install is recommended.
 
 > **Linux troubleshooting:** If the mod fails during startup with a Harmony / `mm-exhelper.so` error mentioning `_Unwind_RaiseException`, make sure your system runtime libraries are available to the game process. Installing `libgcc-s1`, `libstdc++6`, and `libunwind8` is usually sufficient.
 >
