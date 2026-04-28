@@ -114,18 +114,21 @@ internal static class SaveInteropService
             }
 
             var accountRoots = Directory.EnumerateDirectories(steamRoot).ToList();
-            _bootstrapTargetAccountRoot = SelectBootstrapTargetAccountRoot(accountRoots);
-            if (!string.IsNullOrEmpty(_bootstrapTargetAccountRoot))
+            if (BetterSavesConfig.IsSyncEnabled)
             {
-                Log.Info(
-                    $"[BetterSaves] First-sync bootstrap will target account root '{_bootstrapTargetAccountRoot}'.");
-            }
+                _bootstrapTargetAccountRoot = SelectBootstrapTargetAccountRoot(accountRoots);
+                if (!string.IsNullOrEmpty(_bootstrapTargetAccountRoot))
+                {
+                    Log.Info(
+                        $"[BetterSaves] First-sync bootstrap will target account root '{_bootstrapTargetAccountRoot}'.");
+                }
 
-            if (!FirstSyncBackupService.EnsureBackup(accountRoots))
-            {
-                BetterSavesConfig.SetBootstrapState(
-                    FirstSyncBootstrapState.Conflict,
-                    "failed to create first-sync backup before startup reconciliation");
+                if (!FirstSyncBackupService.EnsureBackup(accountRoots))
+                {
+                    BetterSavesConfig.SetBootstrapState(
+                        FirstSyncBootstrapState.Conflict,
+                        "failed to create first-sync backup before startup reconciliation");
+                }
             }
 
             foreach (var accountRoot in accountRoots
@@ -301,7 +304,7 @@ internal static class SaveInteropService
         string reason,
         ReconcilePreference preference = ReconcilePreference.Auto)
     {
-        if (!_initialized)
+        if (!_initialized || !BetterSavesConfig.IsSyncEnabled)
         {
             return;
         }
@@ -322,7 +325,7 @@ internal static class SaveInteropService
         bool isMultiplayer,
         ReconcilePreference preference)
     {
-        if (!_initialized)
+        if (!_initialized || !BetterSavesConfig.IsSyncEnabled)
         {
             return;
         }
@@ -348,7 +351,7 @@ internal static class SaveInteropService
         string reason,
         bool isMultiplayer = false)
     {
-        if (!_initialized)
+        if (!_initialized || !BetterSavesConfig.IsSyncEnabled)
         {
             return;
         }
@@ -372,7 +375,7 @@ internal static class SaveInteropService
 
     public static void RestorePreferredProfileSelectionForCurrentMode()
     {
-        if (!_initialized)
+        if (!_initialized || !BetterSavesConfig.IsSyncEnabled)
         {
             return;
         }
@@ -510,6 +513,12 @@ internal static class SaveInteropService
 
     public static bool TryGetPendingBootstrapPrompt(out BootstrapPromptRequest prompt)
     {
+        if (!BetterSavesConfig.IsSyncEnabled)
+        {
+            prompt = default;
+            return false;
+        }
+
         lock (BootstrapPromptLock)
         {
             if (_pendingBootstrapPrompt is { } pending
@@ -531,6 +540,11 @@ internal static class SaveInteropService
 
     public static bool ConfirmPendingBootstrapPrompt(string source, BootstrapImportAction? overrideAction)
     {
+        if (!BetterSavesConfig.IsSyncEnabled)
+        {
+            return false;
+        }
+
         BootstrapPromptRequest request;
         lock (BootstrapPromptLock)
         {
@@ -598,6 +612,11 @@ internal static class SaveInteropService
 
     public static bool DeclinePendingBootstrapPrompt(string source)
     {
+        if (!BetterSavesConfig.IsSyncEnabled)
+        {
+            return false;
+        }
+
         lock (BootstrapPromptLock)
         {
             if (_pendingBootstrapPrompt is null)
@@ -684,6 +703,11 @@ internal static class SaveInteropService
 
     private static void ReconcileAllProfilesUnsafe(string reason, ReconcilePreference preference)
     {
+        if (!BetterSavesConfig.IsSyncEnabled)
+        {
+            return;
+        }
+
         lock (InitLock)
         {
             foreach (var syncRoot in SyncRoots)
@@ -743,7 +767,10 @@ internal static class SaveInteropService
         {
             _accountRoot = Path.GetFullPath(accountRoot);
 
-            ReconcileAllProfiles("startup scan", VanillaModeCompatibilityPatches.StartupReconcilePreference);
+            if (BetterSavesConfig.IsSyncEnabled)
+            {
+                ReconcileAllProfiles("startup scan", VanillaModeCompatibilityPatches.StartupReconcilePreference);
+            }
 
             _watcher = new FileSystemWatcher(_accountRoot)
             {
@@ -781,6 +808,11 @@ internal static class SaveInteropService
 
         public void ReconcileAllProfiles(string reason, ReconcilePreference preference = ReconcilePreference.Auto)
         {
+            if (!BetterSavesConfig.IsSyncEnabled)
+            {
+                return;
+            }
+
             for (var profileIndex = 1; profileIndex <= 3; profileIndex++)
             {
                 SyncProfilePair(profileIndex, reason, preference);
@@ -1521,7 +1553,7 @@ internal static class SaveInteropService
 
         private void OnFileChanged(object sender, FileSystemEventArgs eventArgs)
         {
-            if (_disposed || IsSuppressed(eventArgs.FullPath))
+            if (_disposed || !BetterSavesConfig.IsSyncEnabled || IsSuppressed(eventArgs.FullPath))
             {
                 return;
             }
@@ -1566,7 +1598,7 @@ internal static class SaveInteropService
 
         private void OnFileDeleted(object sender, FileSystemEventArgs eventArgs)
         {
-            if (_disposed || IsSuppressed(eventArgs.FullPath))
+            if (_disposed || !BetterSavesConfig.IsSyncEnabled || IsSuppressed(eventArgs.FullPath))
             {
                 return;
             }
@@ -1627,7 +1659,7 @@ internal static class SaveInteropService
 
         private void OnFileRenamed(object sender, RenamedEventArgs eventArgs)
         {
-            if (_disposed)
+            if (_disposed || !BetterSavesConfig.IsSyncEnabled)
             {
                 return;
             }
@@ -1757,6 +1789,7 @@ internal static class SaveInteropService
             var normalized = NormalizeRelativePath(profileRelativePath);
             return BetterSavesConfig.CurrentMode switch
             {
+                SyncMode.Disabled => false,
                 SyncMode.SaveOnly => SaveOnlyPaths.Contains(normalized),
                 SyncMode.DataOnly => IsDataOnlyProfileRelativePath(normalized),
                 SyncMode.FullSync => !IsEphemeralProfileRelativePath(normalized),
@@ -2180,6 +2213,11 @@ internal static class SaveInteropService
             string reason,
             bool allowSinglePlayerDataProtection = true)
         {
+            if (!BetterSavesConfig.IsSyncEnabled)
+            {
+                return;
+            }
+
             try
             {
                 if (TryProtectPendingBootstrapFile(sourcePath, targetPath, reason))
@@ -3344,6 +3382,11 @@ internal static class SaveInteropService
 
         private void DeleteFileSafely(string targetPath, string reason)
         {
+            if (!BetterSavesConfig.IsSyncEnabled)
+            {
+                return;
+            }
+
             if (!File.Exists(targetPath))
             {
                 return;

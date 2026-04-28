@@ -7,7 +7,8 @@ internal enum SyncMode
 {
     SaveOnly = 0,
     FullSync = 1,
-    DataOnly = 2
+    DataOnly = 2,
+    Disabled = 3
 }
 
 internal enum FirstSyncBootstrapState
@@ -54,7 +55,8 @@ internal static class BetterSavesConfig
     public static bool IsSaveSyncEnabled => CurrentMode is SyncMode.SaveOnly or SyncMode.FullSync;
     public static bool IsDataSyncEnabled => CurrentMode is SyncMode.DataOnly or SyncMode.FullSync;
     public static bool IsSettingsSyncEnabled => CurrentMode == SyncMode.FullSync;
-    public static bool UsesSharedProfileSelection => CurrentMode != SyncMode.DataOnly;
+    public static bool IsSyncEnabled => CurrentMode != SyncMode.Disabled;
+    public static bool UsesSharedProfileSelection => CurrentMode is SyncMode.SaveOnly or SyncMode.FullSync;
     public static bool IsBootstrapPending => BootstrapState == FirstSyncBootstrapState.Pending;
     public static bool IsBootstrapBackupCreated
     {
@@ -119,9 +121,12 @@ internal static class BetterSavesConfig
             SaveUnsafe(_cached);
         }
 
-        SaveInteropService.ReconcileNow(
-            $"config change: {mode}",
-            VanillaModeCompatibilityPatches.StartupReconcilePreference);
+        if (mode != SyncMode.Disabled)
+        {
+            SaveInteropService.ReconcileNow(
+                $"config change: {mode}",
+                VanillaModeCompatibilityPatches.StartupReconcilePreference);
+        }
     }
 
     public static void SetBootstrapState(FirstSyncBootstrapState state, string reason)

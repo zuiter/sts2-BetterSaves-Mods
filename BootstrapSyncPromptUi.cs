@@ -60,7 +60,7 @@ internal static class BootstrapSyncPromptUi
                 return;
             }
 
-            if (BetterSavesConfig.IsBootstrapPending)
+            if (BetterSavesConfig.IsSyncEnabled && BetterSavesConfig.IsBootstrapPending)
             {
                 SchedulePromptCheck(root);
             }

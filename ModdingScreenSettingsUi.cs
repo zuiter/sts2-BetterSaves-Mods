@@ -565,6 +565,7 @@ internal static class ModdingScreenSettingsUi
     {
         return
         [
+            BetterSavesLocalization.GetModeDisplayName(SyncMode.Disabled),
             BetterSavesLocalization.GetModeDisplayName(SyncMode.SaveOnly),
             BetterSavesLocalization.GetModeDisplayName(SyncMode.DataOnly),
             BetterSavesLocalization.GetModeDisplayName(SyncMode.FullSync)
@@ -731,9 +732,10 @@ internal static class ModdingScreenSettingsUi
     {
         return mode switch
         {
-            SyncMode.SaveOnly => 0,
-            SyncMode.DataOnly => 1,
-            SyncMode.FullSync => 2,
+            SyncMode.Disabled => 0,
+            SyncMode.SaveOnly => 1,
+            SyncMode.DataOnly => 2,
+            SyncMode.FullSync => 3,
             _ => 0
         };
     }
@@ -742,10 +744,11 @@ internal static class ModdingScreenSettingsUi
     {
         return index switch
         {
-            0 => SyncMode.SaveOnly,
-            1 => SyncMode.DataOnly,
-            2 => SyncMode.FullSync,
-            _ => SyncMode.SaveOnly
+            0 => SyncMode.Disabled,
+            1 => SyncMode.SaveOnly,
+            2 => SyncMode.DataOnly,
+            3 => SyncMode.FullSync,
+            _ => BetterSavesConfig.CurrentMode
         };
     }
 

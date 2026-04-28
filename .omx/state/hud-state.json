@@ -1,6 +1,6 @@
 {
-  "last_turn_at": "2026-04-27T16:48:33.310Z",
-  "turn_count": 69,
-  "last_progress_at": "2026-04-27T16:48:33.310Z",
-  "last_agent_output": "已升级到 `0.4.1`，并完善了 README。\n\n改动文件：\n- [BetterSaves.json](<E:/Godot/项目/better-saves/BetterSaves.json:6>)"
+  "last_turn_at": "2026-04-28T11:29:10.182Z",
+  "turn_count": 81,
+  "last_progress_at": "2026-04-28T11:29:10.182Z",
+  "last_agent_output": "已把版本升到 `0.4.2`。\n\n改动包括：\n- [BetterSaves.json](E:/Godot/项目/better-saves/BetterSaves.json:6) 改为 `\"versio"
 }

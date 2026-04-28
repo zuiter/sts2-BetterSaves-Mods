@@ -2,7 +2,7 @@
 
 中文文档。英文版请见 [**English**](README.md)。
 
-![Version](https://img.shields.io/badge/Version-0.4.1-blue.svg)
+![Version](https://img.shields.io/badge/Version-0.4.2-blue.svg)
 ![Game](https://img.shields.io/badge/Slay_The_Spire_2-Mod-red.svg)
 ![Platform](https://img.shields.io/badge/Platform-Windows%20|%20Linux-lightgrey.svg)
 
@@ -12,11 +12,14 @@
 
 - 原版存档槽与模组存档槽之间的双向同步
 - 只启用 `BetterSaves` 时可进入原版兼容模式
-- 游戏内可切换 `仅同步存档`、`仅同步数据`、`完整同步`
+- 游戏内可切换 `关闭同步`、`仅同步存档`、`仅同步数据`、`完整同步`
 - 存档界面会标识当前槽位读取的是原版档还是模组档
 
 ## 同步模式
 
+- `关闭同步`
+  关闭 BetterSaves 在原版存档与模组存档之间的自动复制、删除和对账。
+  关闭同步后，之后产生的保存只会保存在游戏当前使用的存档侧；如需两侧保持一致，请在关闭前先保存并等待同步完成。
 - `仅同步存档`
   只同步当前正在进行中的单人局存档文件。
 - `仅同步数据`

@@ -2,7 +2,7 @@
 
 English documentation. For Simplified Chinese, see [**简体中文**](README_ZH.md).
 
-![Version](https://img.shields.io/badge/Version-0.4.1-blue.svg)
+![Version](https://img.shields.io/badge/Version-0.4.2-blue.svg)
 ![Game](https://img.shields.io/badge/Slay_The_Spire_2-Mod-red.svg)
 ![Platform](https://img.shields.io/badge/Platform-Windows%20|%20Linux-lightgrey.svg)
 
@@ -12,11 +12,14 @@ English documentation. For Simplified Chinese, see [**简体中文**](README_ZH.
 
 - Bidirectional sync between vanilla and modded save slots
 - Vanilla compatibility mode when only `BetterSaves` is enabled
-- In-game sync mode setting with `Save Only`, `Data Only`, and `Full Sync`
+- In-game sync mode setting with `Sync Off`, `Save Only`, `Data Only`, and `Full Sync`
 - Profile-screen badge that shows whether the current slot is using vanilla or modded saves
 
 ## Sync Modes
 
+- `Sync Off`
+  Disables BetterSaves automatic copying, deletion, and reconciliation between vanilla and modded save folders.
+  Saves made after Sync Off stay only on the save side the game is currently using; save and wait for sync before turning it off if you need both sides to stay aligned.
 - `Save Only`
   Syncs only the currently active single-player run save files.
 - `Data Only`

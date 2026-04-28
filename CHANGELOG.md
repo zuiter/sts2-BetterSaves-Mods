@@ -1,5 +1,17 @@
 ﻿# Changelog
 
+## 0.4.2 - 2026-04-28
+
+### English
+
+- Added a `Sync Off` mode that keeps BetterSaves loaded but disables automatic copying, deletion, startup reconciliation, file-watcher mirroring, and first-sync prompts between vanilla and modded save folders.
+- Documented that saves made after enabling `Sync Off` stay only on the save side the game is currently using, and that players should save and wait for sync before turning it off if they need both sides to stay aligned.
+
+### 中文
+
+- 新增 `关闭同步` 模式：保留 BetterSaves 加载与界面，但关闭原版存档与模组存档之间的自动复制、删除、启动对账、文件监听镜像和首次同步弹窗。
+- 补充说明：启用 `关闭同步` 后，之后产生的保存只会保存在游戏当前使用的存档侧；如果需要两侧保持一致，应先保存并等待同步完成后再关闭。
+
 ## 0.4.1 - 2026-04-28
 
 ### English
